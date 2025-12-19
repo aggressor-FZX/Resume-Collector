@@ -42,4 +42,14 @@ Notes
 - The formatter expects input JSON with a top-level `resumes` array. Example entries: `{ "original_bullet": "...", "improved_bullet": "...", "context": "..." }`.
 - You can set `--format anthropic|llama` to change message structure if needed.
 
-If you want, I can open a PR with these changes and add a test job. Reply `yes` and I will create a branch, commit, push, and open a PR.
+Privacy & data handling
+
+- **Anonymization**: the formatter runs lightweight anonymization to replace emails, phone numbers, and some name patterns with tokens like `[EMAIL]`, `[PHONE]`, and `[NAME]`.
+- **Deduplication**: duplicate bullets are deduplicated case-insensitively to reduce noisy examples in training data.
+- **No auto fine-tuning**: This pipeline only collects and formats training data. It does **not** trigger or upload to any fine-tuning/training provider automatically — that step is intentionally manual to allow review and governance.
+
+Testing & CI
+
+- A `Validate Formatter` workflow runs on PRs and checks that the TypeScript formatter and unit tests pass against sample data.
+
+If you want me to adjust anonymization rules or add stronger PII scrubbing (e.g., named-entity recognition based), I can add that as an optional step.
