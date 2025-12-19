@@ -1,0 +1,14 @@
+{
+  "resumes": [
+    {
+      "original_bullet": "Responsible for managing servers and fixing bugs",
+      "improved_bullet": "Reduced system downtime by 40% by proactively managing 50+ Linux servers and implementing automated monitoring that caught 200+ critical bugs pre-production",
+      "context": "Site Reliability Engineer at ExampleCorp"
+    },
+    {
+      "original_bullet": "Worked on web app features",
+      "improved_bullet": "Implemented 5 new features that increased user retention by 18% and reduced average page load time by 30%",
+      "context": "Full-stack Engineer at StartupX"
+    }
+  ]
+}

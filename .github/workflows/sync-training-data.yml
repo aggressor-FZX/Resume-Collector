@@ -1,0 +1,79 @@
+name: Sync Resume Training Data
+
+on:
+  schedule:
+    - cron: '0 8 * * *'  # Daily at 8am UTC
+  workflow_dispatch:
+  repository_dispatch:
+    types: [resume-api-update]
+
+jobs:
+  sync-and-format:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout Resume-Collector
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: npm ci || true
+
+      - name: Fetch from Resume API
+        env:
+          RESUME_API_KEY: ${{ secrets.RESUME_API_KEY }}
+          RESUME_API_URL: ${{ vars.RESUME_API_URL }}
+        run: |
+          mkdir -p training-data/raw
+          curl -s -H "Authorization: Bearer $RESUME_API_KEY" \
+               -H "Accept: application/json" \
+               "$RESUME_API_URL/batch?limit=100" \
+               -o training-data/raw/resumes-$(date +%Y%m%d).json || exit 0
+
+      - name: Format for LLM Fine-Tuning
+        run: |
+          node scripts/format-for-llm.js \
+            --input training-data/raw/resumes-$(date +%Y%m%d).json \
+            --output training-data/formatted/resumes-$(date +%Y%m%d).jsonl \
+            --format openai || echo "No input found or no resumes to format"
+
+      - name: Validate JSONL
+        run: |
+          if [ -f training-data/formatted/resumes-$(date +%Y%m%d).jsonl ]; then
+            python - <<'PY'
+import sys,json
+p='training-data/formatted/resumes-$(date +%Y%m%d).jsonl'
+with open(p,'r') as f:
+    for i,line in enumerate(f,1):
+        try:
+            json.loads(line)
+        except Exception as e:
+            print(f"Invalid JSONL at line {i}: {e}")
+            sys.exit(1)
+print('✅ JSONL validation passed')
+PY
+          else
+            echo "No formatted file to validate"
+          fi
+
+      - name: Update Latest Symlink
+        run: |
+          cd training-data/formatted || exit 0
+          if [ -f resumes-$(date +%Y%m%d).jsonl ]; then
+            ln -sf resumes-$(date +%Y%m%d).jsonl latest.jsonl || true
+          fi
+
+      - name: Commit & Push
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git add training-data/ || true
+          git commit -m "chore: sync $(date +%Y-%m-%d) training data" || echo "No changes"
+          git push || echo "Push failed"
