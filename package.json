@@ -1,0 +1,21 @@
+{
+  "name": "resume-collector",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "format": "ts-node scripts/format-for-llm.ts --input training-data/raw/sample.json --output training-data/formatted/sample.jsonl --format openai",
+    "build": "tsc",
+    "test": "jest --runInBand"
+  },
+  "devDependencies": {
+    "@types/jest": "^29.5.3",
+    "@types/lodash": "^4.17.21",
+    "jest": "^29.6.1",
+    "ts-jest": "^29.1.0",
+    "ts-node": "^10.9.1",
+    "typescript": "^5.5.2"
+  },
+  "dependencies": {
+    "lodash": "^4.17.21"
+  }
+}
