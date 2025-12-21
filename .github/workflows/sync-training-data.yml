@@ -37,12 +37,16 @@ jobs:
                "$RESUME_API_URL/batch?limit=100" \
                -o training-data/raw/resumes-$(date +%Y%m%d).json || exit 0
 
-      - name: Format for LLM Fine-Tuning
+      - name: Format for LLM Fine-Tuning (TypeScript)
         run: |
-          node scripts/format-for-llm.js \
+          npx ts-node scripts/format-for-llm.ts \
             --input training-data/raw/resumes-$(date +%Y%m%d).json \
             --output training-data/formatted/resumes-$(date +%Y%m%d).jsonl \
             --format openai || echo "No input found or no resumes to format"
+
+      - name: Run tests
+        run: |
+          npm test --silent || true
 
       - name: Validate JSONL
         run: |

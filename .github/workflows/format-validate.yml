@@ -17,9 +17,17 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Run formatter on sample data
+      - name: Install dependencies
         run: |
-          node scripts/format-for-llm.js --input training-data/raw/sample.json --output training-data/formatted/sample.jsonl --format openai
+          npm ci || true
+
+      - name: Run formatter on sample data (TypeScript)
+        run: |
+          npx ts-node scripts/format-for-llm.ts --input training-data/raw/sample.json --output training-data/formatted/sample.jsonl --format openai
+
+      - name: Run tests
+        run: |
+          npm test --silent
 
       - name: Validate JSONL
         run: |

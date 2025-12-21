@@ -1,7 +1,7 @@
 import asyncio
 import pytest
 from src.scrapers.stackexchange_scraper import StackExchangeScraper
-from src.resume_model import ResumeData
+from src.schemas.resume_data import ResumeData
 
 @pytest.mark.asyncio
 async def test_determine_title_and_skills():
@@ -21,7 +21,14 @@ async def test_create_resume_from_user():
 
     # patch network calls
     async def fake_get_user_tags(user_id):
-        return [{'tag_name': 'python', 'post_score': 10, 'answer_count': 5}]
+        return [
+            {'tag_name': 'python', 'post_score': 10, 'answer_count': 5},
+            {'tag_name': 'javascript', 'post_score': 8, 'answer_count': 3},
+            {'tag_name': 'django', 'post_score': 6, 'answer_count': 2},
+            {'tag_name': 'react', 'post_score': 4, 'answer_count': 1},
+            {'tag_name': 'sql', 'post_score': 3, 'answer_count': 1},
+            {'tag_name': 'git', 'post_score': 2, 'answer_count': 1}
+        ]
 
     async def fake_get_user_top_answers(user_id):
         return [{'score': 42, 'is_accepted': True}, {'score': 10, 'is_accepted': False}]
