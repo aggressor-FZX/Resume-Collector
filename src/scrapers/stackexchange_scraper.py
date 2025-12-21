@@ -4,7 +4,7 @@ import logging
 
 from src.base_scraper import BaseScraper, RateLimiter
 import src.config as cfg
-from src.resume_model import ResumeData
+from src.schemas.resume_data import ResumeData, ExperienceEntry
 
 logger = logging.getLogger(__name__)
 
@@ -18,13 +18,21 @@ class StackExchangeScraper(BaseScraper):
     """Scraper for Stack Exchange API to extract developer profile data."""
 
     def __init__(self):
-        super().__init__()
+        super().__init__("StackExchange")
         self.rate_limiter = RateLimiter(RATE_LIMIT, 86400)  # Daily limit
         self.base_url = STACK_BASE
         self.headers = {'User-Agent': 'Resume-Collector/1.0', 'Accept': 'application/json'}
 
     def get_source_name(self) -> str:
         return "StackExchange"
+
+    async def scrape(self, *args, **kwargs) -> List[ResumeData]:
+        """
+        Main scraping method - delegate to scrape_resumes.
+        """
+        query = kwargs.get('query', '')
+        limit = kwargs.get('limit', 100)
+        return await self.scrape_resumes(query, limit)
 
     async def scrape_resumes(self, query: str, limit: int = 100) -> List[ResumeData]:
         resumes: List[ResumeData] = []
@@ -223,20 +231,47 @@ class StackExchangeScraper(BaseScraper):
         except Exception:
             return None
 
-    def _create_experience_list(self, user: Dict, tags: List[Dict]) -> List[str]:
+    def _create_experience_list(self, user: Dict, tags: List[Dict]) -> List[ExperienceEntry]:
         experience = []
         reputation = user.get('reputation', 0)
         if reputation > 1000:
-            experience.append(f"Earned {reputation:,} reputation points on Stack Overflow")
+            experience.append(ExperienceEntry(
+                title="Stack Overflow Contributor",
+                company="Stack Overflow",
+                description=f"Earned {reputation:,} reputation points demonstrating technical expertise",
+                start_date=None,
+                end_date=None,
+                location=None
+            ))
         badge_counts = user.get('badge_counts', {})
         gold_badges = badge_counts.get('gold', 0)
         if gold_badges > 0:
-            experience.append(f"Earned {gold_badges} gold badges for exceptional contributions")
+            experience.append(ExperienceEntry(
+                title="Recognized Expert",
+                company="Stack Overflow",
+                description=f"Earned {gold_badges} gold badges for exceptional contributions to the developer community",
+                start_date=None,
+                end_date=None,
+                location=None
+            ))
         if tags:
             top_tags = [tag.get('tag_name', '') for tag in tags[:3]]
-            experience.append(f"Demonstrated expertise in: {', '.join(top_tags)}")
+            experience.append(ExperienceEntry(
+                title="Technical Expert",
+                company="Self-employed/Open Source",
+                description=f"Demonstrated expertise in: {', '.join(top_tags)}",
+                start_date=None,
+                end_date=None,
+                location=None
+            ))
         answer_count = user.get('answer_count', 0)
-        question_count = user.get('question_count', 0)
         if answer_count and answer_count > 10:
-            experience.append(f"Provided {answer_count} answers helping the developer community")
+            experience.append(ExperienceEntry(
+                title="Community Helper",
+                company="Stack Overflow",
+                description=f"Provided {answer_count} answers helping fellow developers solve technical challenges",
+                start_date=None,
+                end_date=None,
+                location=None
+            ))
         return experience
