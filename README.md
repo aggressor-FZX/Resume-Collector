@@ -52,4 +52,22 @@ Testing & CI
 
 - A `Validate Formatter` workflow runs on PRs and checks that the TypeScript formatter and unit tests pass against sample data.
 
+## Development setup 🔧
+
+Create a virtual environment and install Python dependencies (example using venv):
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+Recommendations:
+
+- Copy `.env.example` to `.env` and fill in provider API keys (e.g., `PERPLEXITY_API_KEY`, `GITHUB_API_KEY`).
+- Use `python -m pytest` to run the test suite.
+- Add new processors and schemas in `src/processors/` and `src/schemas/` respectively.
+
+If you want, I can add Makefile targets for setup and testing—tell me which tooling you prefer (pip/venv, poetry, or pipx).
+
 If you want me to adjust anonymization rules or add stronger PII scrubbing (e.g., named-entity recognition based), I can add that as an optional step.
