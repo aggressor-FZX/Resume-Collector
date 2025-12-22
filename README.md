@@ -68,9 +68,7 @@ Recommendations:
 - Use `python -m pytest` to run the test suite.
 - Add new processors and schemas in `src/processors/` and `src/schemas/` respectively.
 
-If you want, I can add Makefile targets for setup and testing—tell me which tooling you prefer (pip/venv, poetry, or pipx).
 
-If you want me to adjust anonymization rules or add stronger PII scrubbing (e.g., named-entity recognition based), I can add that as an optional step.
 
 ## Uploading to Hugging Face
 
@@ -104,3 +102,68 @@ python scripts/upload_to_hf.py
 - The script looks for formatted JSONL files in `training-data/formatted/`.
 - Ensure the dataset is properly formatted and anonymized before uploading.
 - Check the Hugging Face repository after upload: [https://huggingface.co/datasets/](https://huggingface.co/datasets/).
+
+## Running the Full Pipeline
+
+Follow these steps to run the entire pipeline from data collection to uploading the dataset to Hugging Face:
+
+### 1. Setup
+
+1. Clone the repository and navigate to the project directory:
+   ```bash
+   git clone https://github.com/aggressor-FZX/Resume-Collector.git
+   cd Resume-Collector
+   ```
+
+2. Create and activate a Python virtual environment:
+   ```bash
+   python -m venv .venv
+   source .venv/bin/activate
+   ```
+
+3. Install the required dependencies:
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+4. Copy the example environment file and configure API keys:
+   ```bash
+   cp .env.example .env
+   # Fill in the required keys, e.g., HUGGING_FACE_API_KEY
+   ```
+
+### 2. Data Collection
+
+Run the scrapers to collect raw resume data. For example, to run the Stack Exchange scraper:
+```bash
+python src/scrapers/stackexchange_scraper.py
+```
+
+### 3. Data Formatting
+
+Format the raw data into JSONL files suitable for fine-tuning:
+```bash
+node scripts/format-for-llm.js --input training-data/raw/sample.json --output training-data/formatted/sample.jsonl --format openai
+```
+
+### 4. Validation
+
+Validate the formatted JSONL files:
+```bash
+python -c "import sys,json; [json.loads(line) for line in open('training-data/formatted/sample.jsonl','r')]"
+```
+
+### 5. Upload to Hugging Face
+
+Upload the formatted dataset to Hugging Face:
+```bash
+python scripts/upload_to_hf.py
+```
+
+This script supports chunked uploads for large datasets and verifies the Hugging Face repository before starting the upload.
+
+### Notes
+
+- Ensure all API keys and environment variables are correctly set in the `.env` file.
+- Check the Hugging Face repository after upload: [https://huggingface.co/datasets/](https://huggingface.co/datasets/).
+- For large datasets, the upload script will automatically split the data into smaller chunks to ensure reliability.

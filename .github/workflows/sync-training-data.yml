@@ -37,11 +37,14 @@ jobs:
                "$RESUME_API_URL/batch?limit=100" \
                -o training-data/raw/resumes-$(date +%Y%m%d).json || exit 0
 
+      - name: Set DATE_FILE
+        run: echo "DATE_FILE=$(date +%Y%m%d)" >> $GITHUB_ENV
+
       - name: Format for LLM Fine-Tuning (TypeScript)
         run: |
           npx ts-node scripts/format-for-llm.ts \
-            --input training-data/raw/resumes-$(date +%Y%m%d).json \
-            --output training-data/formatted/resumes-$(date +%Y%m%d).jsonl \
+            --input training-data/raw/resumes-${{ env.DATE_FILE }}.json \
+            --output training-data/formatted/resumes-${{ env.DATE_FILE }}.jsonl \
             --format openai || echo "No input found or no resumes to format"
 
       - name: Run tests
@@ -50,19 +53,20 @@ jobs:
 
       - name: Validate JSONL
         run: |
-          if [ -f training-data/formatted/resumes-$(date +%Y%m%d).jsonl ]; then
-            python - <<'PY'
+          if [ -f "training-data/formatted/resumes-${DATE_FILE}.jsonl" ]; then
+            python3 -c "
 import sys,json
-p='training-data/formatted/resumes-$(date +%Y%m%d).jsonl'
+import os
+p = os.environ.get('DATE_FILE_PATH', 'training-data/formatted/resumes-${DATE_FILE}.jsonl')
 with open(p,'r') as f:
     for i,line in enumerate(f,1):
         try:
             json.loads(line)
         except Exception as e:
-            print(f"Invalid JSONL at line {i}: {e}")
+            print(f'Invalid JSONL at line {i}: {e}')
             sys.exit(1)
 print('✅ JSONL validation passed')
-PY
+"
           else
             echo "No formatted file to validate"
           fi
@@ -70,7 +74,7 @@ PY
       - name: Update Latest Symlink
         run: |
           cd training-data/formatted || exit 0
-          if [ -f resumes-$(date +%Y%m%d).jsonl ]; then
+          if [ -f resumes-${DATE_FILE}.jsonl ]; then
             ln -sf resumes-$(date +%Y%m%d).jsonl latest.jsonl || true
           fi
 

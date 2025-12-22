@@ -54,7 +54,7 @@ class StackExchangeScraper(BaseScraper):
                 params['key'] = STACK_KEY
 
             logger.info(f"Searching Stack Overflow users: page {page}")
-            search_results = await self.make_request(search_url, self.headers, params)
+            search_results = await self.make_request('GET', search_url, headers=self.headers, params=params)
 
             if not search_results or 'items' not in search_results:
                 logger.warning("No more Stack Overflow users found")
@@ -98,18 +98,20 @@ class StackExchangeScraper(BaseScraper):
         experience_years = self._estimate_experience_from_so(user_data)
         experience = self._create_experience_list(user_data, tags_data)
 
+        source_url = user_data.get('link', None)
         # standardize to ResumeData dataclass
         return ResumeData(
             name=display_name,
             title=title,
             content=content,
             resume_text=content,
-            total_experience_years=experience_years,
+            total_experience_years=float(experience_years) if experience_years is not None else 0.0,
             experience=experience,
             skills=skills,
             location=location,
             source='StackExchange',
-            anonymized=True
+            anonymized=True,
+            source_url=source_url
         )
 
     async def _get_user_tags(self, user_id: int) -> List[Dict]:
@@ -117,7 +119,7 @@ class StackExchangeScraper(BaseScraper):
         params = {'site': 'stackoverflow', 'pagesize': 20}
         if STACK_KEY:
             params['key'] = STACK_KEY
-        result = await self.make_request(url, self.headers, params)
+        result = await self.make_request('GET', url, headers=self.headers, params=params)
         return result.get('items', []) if result else []
 
     async def _get_user_top_answers(self, user_id: int) -> List[Dict]:
@@ -125,7 +127,7 @@ class StackExchangeScraper(BaseScraper):
         params = {'site': 'stackoverflow', 'sort': 'votes', 'order': 'desc', 'pagesize': 5, 'filter': 'withbody'}
         if STACK_KEY:
             params['key'] = STACK_KEY
-        result = await self.make_request(url, self.headers, params)
+        result = await self.make_request('GET', url, headers=self.headers, params=params)
         return result.get('items', []) if result else []
 
     def _determine_title_from_tags(self, tags: List[Dict]) -> str:
