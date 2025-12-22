@@ -42,6 +42,7 @@ for (const r of resumes) {
   // anonymize and dedupe
   const anonymized = anonymizeText(original);
   const improved = (r.improved_bullet || r.improved || r.rewrite || '').toString().trim();
+  const anonymized_improved = anonymizeText(improved);
   const context = (r.context || `${r.role || ''} ${r.company || ''}`.trim()) || 'General tech role';
 
   // dedupe: we may dedupe across a resume's bullets
@@ -51,15 +52,15 @@ for (const r of resumes) {
     if (format === 'openai') {
       messages.push({ role: 'system', content: `You are a world-class tech resume writer. Transform weak, passive bullet points into powerful, metric-driven achievements. Context: ${context}` });
       messages.push({ role: 'user', content: `Improve this resume bullet:\n"${b}"` });
-      messages.push({ role: 'assistant', content: improved || '' });
+      messages.push({ role: 'assistant', content: anonymized_improved || '' });
     } else if (format === 'anthropic') {
       messages.push({ role: 'system', content: `You are a world-class tech resume writer. Context: ${context}` });
       messages.push({ role: 'user', content: `Rewrite: ${b}` });
-      messages.push({ role: 'assistant', content: improved || '' });
+      messages.push({ role: 'assistant', content: anonymized_improved || '' });
     } else {
       messages.push({ role: 'system', content: `You are an expert tech resume writer. Context: ${context}` });
       messages.push({ role: 'user', content: b });
-      messages.push({ role: 'assistant', content: improved || '' });
+      messages.push({ role: 'assistant', content: anonymized_improved || '' });
     }
 
     const example = { messages };
