@@ -71,3 +71,36 @@ Recommendations:
 If you want, I can add Makefile targets for setup and testing—tell me which tooling you prefer (pip/venv, poetry, or pipx).
 
 If you want me to adjust anonymization rules or add stronger PII scrubbing (e.g., named-entity recognition based), I can add that as an optional step.
+
+## Uploading to Hugging Face
+
+The `scripts/upload_to_hf.py` script is used to upload formatted datasets to Hugging Face. It supports chunked uploads for large datasets and verifies the destination repository before starting the upload.
+
+### Prerequisites
+
+1. Ensure you have a Hugging Face account and API token.
+2. Add the token to your `.env` file:
+
+```bash
+HUGGING_FACE_API_KEY=<your_huggingface_token>
+```
+
+### Running the Script
+
+To upload the dataset:
+
+```bash
+python scripts/upload_to_hf.py
+```
+
+### Features
+
+- **Chunked Uploads**: The script splits large datasets into smaller chunks for reliable uploads.
+- **Destination Verification**: Ensures the Hugging Face repository is reachable and properly configured before uploading.
+- **Dataset Card**: Automatically generates a simple dataset card (`dataset_card.md`).
+
+### Notes
+
+- The script looks for formatted JSONL files in `training-data/formatted/`.
+- Ensure the dataset is properly formatted and anonymized before uploading.
+- Check the Hugging Face repository after upload: [https://huggingface.co/datasets/](https://huggingface.co/datasets/).
