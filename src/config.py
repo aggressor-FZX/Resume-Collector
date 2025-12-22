@@ -13,23 +13,38 @@ from dotenv import load_dotenv
 # Load environment variables from .env file
 load_dotenv()
 
+"""
+Configuration management for Resume-Collector
+
+Uses Pydantic for validation and environment variable loading.
+"""
+
+import os
+from pathlib import Path
+from typing import Optional
+from pydantic import BaseModel, Field
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
+
 class APIKeys(BaseModel):
     """API keys for various data sources"""
-    github_api_key: Optional[str] = Field(default=None, env="GITHUB_API_KEY")
-    stack_exchange_api_key: Optional[str] = Field(default=None, env="STACK_EXCHANGE_API_KEY")
-    semantic_scholar_api_key: Optional[str] = Field(default=None, env="SEMANTIC_SCHOLAR_API_KEY")
-    hugging_face_api_key: Optional[str] = Field(default=None, env="HUGGING_FACE_API_KEY")
-    perplexity_api_key: Optional[str] = Field(default=None, env="PERPLEXITY_API_KEY")
-    anthropic_api_key: Optional[str] = Field(default=None, env="ANTHROPIC_API_KEY")
-    deepseek_api_key: Optional[str] = Field(default=None, env="DEEPSEEK_API_KEY")
-    openrouter_api_key: Optional[str] = Field(default=None, env="OPENROUTER_API_KEY")
+    github_api_key: Optional[str] = Field(default_factory=lambda: os.getenv("GITHUB_API_KEY"))
+    stack_exchange_api_key: Optional[str] = Field(default_factory=lambda: os.getenv("STACK_EXCHANGE_API_KEY"))
+    semantic_scholar_api_key: Optional[str] = Field(default_factory=lambda: os.getenv("SEMANTIC_SCHOLAR_API_KEY"))
+    hugging_face_api_key: Optional[str] = Field(default_factory=lambda: os.getenv("HUGGING_FACE_API_KEY"))
+    perplexity_api_key: Optional[str] = Field(default_factory=lambda: os.getenv("PERPLEXITY_API_KEY"))
+    anthropic_api_key: Optional[str] = Field(default_factory=lambda: os.getenv("ANTHROPIC_API_KEY"))
+    deepseek_api_key: Optional[str] = Field(default_factory=lambda: os.getenv("DEEPSEEK_API_KEY"))
+    openrouter_api_key: Optional[str] = Field(default_factory=lambda: os.getenv("OPENROUTER_API_KEY"))
 
 class RateLimits(BaseModel):
     """Rate limiting configuration"""
-    github_rate_limit: int = Field(default=5000, env="GITHUB_RATE_LIMIT")
-    stack_exchange_rate_limit: int = Field(default=1000, env="STACK_EXCHANGE_RATE_LIMIT")
-    semantic_scholar_rate_limit: int = Field(default=1000, env="SEMANTIC_SCHOLAR_RATE_LIMIT")
-    openalex_rate_limit: int = Field(default=10, env="OPENALEX_RATE_LIMIT")
+    github_rate_limit: int = Field(default_factory=lambda: int(os.getenv("GITHUB_RATE_LIMIT", "5000")))
+    stack_exchange_rate_limit: int = Field(default_factory=lambda: int(os.getenv("STACK_EXCHANGE_RATE_LIMIT", "1000")))
+    semantic_scholar_rate_limit: int = Field(default_factory=lambda: int(os.getenv("SEMANTIC_SCHOLAR_RATE_LIMIT", "1000")))
+    openalex_rate_limit: int = Field(default_factory=lambda: int(os.getenv("OPENALEX_RATE_LIMIT", "10")))
 
 class HTTPConfig(BaseModel):
     """HTTP client configuration"""
@@ -40,15 +55,15 @@ class HTTPConfig(BaseModel):
 
 class LoggingConfig(BaseModel):
     """Logging configuration"""
-    level: str = Field(default="INFO", env="LOG_LEVEL")
+    level: str = Field(default_factory=lambda: os.getenv("LOG_LEVEL", "INFO"))
     format: str = Field(default="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
     file_path: Optional[str] = Field(default=None, description="Log file path")
 
 class ProjectConfig(BaseModel):
     """Project-wide configuration"""
-    name: str = Field(default="scrap_tool", env="PROJECT_NAME")
-    data_output_dir: str = Field(default="./data", env="DATA_OUTPUT_DIR")
-    log_level: str = Field(default="INFO", env="LOG_LEVEL")
+    name: str = Field(default_factory=lambda: os.getenv("PROJECT_NAME", "scrap_tool"))
+    data_output_dir: str = Field(default_factory=lambda: os.getenv("DATA_OUTPUT_DIR", "./data"))
+    log_level: str = Field(default_factory=lambda: os.getenv("LOG_LEVEL", "INFO"))
 
 class Config(BaseModel):
     """Main configuration class"""

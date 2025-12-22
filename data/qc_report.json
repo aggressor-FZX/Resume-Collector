@@ -1,0 +1,30 @@
+{
+  "dedup_before": 69783,
+  "dedup_after": 65928,
+  "dedup_removed": 3855,
+  "qc": {
+    "total": 65928,
+    "min_len": 33,
+    "max_len": 91332,
+    "mean_len": 1955.836852323747,
+    "median_len": 894.0,
+    "p25_len": 500.0,
+    "p75_len": 1519.75,
+    "len_ge_200": 56110,
+    "have_skills": 0,
+    "have_experience": 0,
+    "have_years": 0,
+    "source_distribution": {
+      "Resume-Collector-sample": 65928
+    },
+    "pii_emails": 0,
+    "pii_urls": 0,
+    "pii_phones": 55851,
+    "pii_long_numbers": 0,
+    "samples_counts": {
+      "short": 5,
+      "mid": 5,
+      "long": 5
+    }
+  }
+}

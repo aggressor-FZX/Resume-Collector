@@ -1,0 +1,2 @@
+{"input": "\"Responsible for managing servers and fixing bugs\"", "err": null, "meta": {"est_input_tokens": 137}, "usage": null, "raw_content": "{\"rewrite\": \"[simulated rewrite]\", \"confidence\": 0.9, \"note\": \"dry_run\"}", "rewrite": "[simulated rewrite]", "confidence": 0.9, "note": "dry_run"}
+{"input": "\"Worked on web app features\"", "err": null, "meta": {"est_input_tokens": 132}, "usage": null, "raw_content": "{\"rewrite\": \"[simulated rewrite]\", \"confidence\": 0.9, \"note\": \"dry_run\"}", "rewrite": "[simulated rewrite]", "confidence": 0.9, "note": "dry_run"}

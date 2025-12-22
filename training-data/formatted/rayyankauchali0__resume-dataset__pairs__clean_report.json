@@ -1,0 +1,12 @@
+{
+  "input_file": "training-data/formatted/rayyankauchali0__resume-dataset__pairs.jsonl",
+  "output_file": "training-data/formatted/rayyankauchali0__resume-dataset__pairs__cleaned.jsonl",
+  "total_input_records": 3500,
+  "unique_outputs": 425,
+  "kept": 1139,
+  "removed_exact_dup": 0,
+  "removed_by_cap": 2361,
+  "redacted_count": 3426,
+  "removed_other": 0,
+  "high_freq_outputs": 39
+}

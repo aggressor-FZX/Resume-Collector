@@ -1,0 +1,14 @@
+QA Summary
+==========
+Total before dedup: 69783
+Total after dedup: 65928
+Duplicates removed: 3855
+
+Content length - min: 33, median: 894.0, mean: 1955.836852323747, max: 91332
+Records >= 200 chars: 56110 (85.11% of filtered)
+Have skills: 0
+Have experience entries: 0
+PII counts - emails: 0, urls: 0, phones: 55851, longnums: 0
+
+Source distribution:
+ - Resume-Collector-sample: 65928
