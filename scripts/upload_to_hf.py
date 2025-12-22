@@ -5,6 +5,7 @@ from datasets import Dataset
 from huggingface_hub import login, HfApi
 import pandas as pd
 from dotenv import load_dotenv
+import math
 
 load_dotenv()
 
@@ -70,9 +71,34 @@ def normalize_example(ex):
     }
 
 
+def chunked_upload(dataset, repo_id, chunk_size=1000):
+    """Upload dataset to Hugging Face in chunks."""
+    total_records = len(dataset)
+    num_chunks = math.ceil(total_records / chunk_size)
+
+    for i in range(num_chunks):
+        start = i * chunk_size
+        end = start + chunk_size
+        chunk = dataset.select(range(start, min(end, total_records)))
+        print(f'🔄 Uploading chunk {i + 1}/{num_chunks} ({len(chunk)} records)')
+        chunk.push_to_hub(repo_id, private=False, commit_message=f'Upload chunk {i + 1}/{num_chunks}')
+        print(f'✅ Successfully uploaded chunk {i + 1}/{num_chunks}')
+
+
 def main():
     if not HF_TOKEN:
         print('❌ HUGGING_FACE_API_KEY not set in .env')
+        return 1
+
+    # Verify Hugging Face destination
+    try:
+        print('🔐 Verifying Hugging Face destination...')
+        api = HfApi()
+        api.whoami()  # Ensure authentication works
+        repo_info = api.repo_info(REPO_ID)
+        print(f'✅ Destination repository {REPO_ID} is reachable and ready.')
+    except Exception as e:
+        print(f'❌ Failed to verify Hugging Face destination: {e}')
         return 1
 
     # find first available file
@@ -109,13 +135,9 @@ def main():
     try:
         print('🔐 Logging into HuggingFace...')
         login(token=HF_TOKEN)
-        api = HfApi()
-        who = api.whoami()
-        print('✅ Authenticated to HuggingFace as', who.get('name') or who.get('user', {}).get('name') or who.get('org'))
-
         ds = Dataset.from_pandas(df)
         print('🔄 Pushing dataset to hub as', REPO_ID)
-        ds.push_to_hub(REPO_ID, private=False, commit_message='Upload anonymized resume dataset (sample)')
+        chunked_upload(ds, REPO_ID)
         print('✅ Successfully pushed dataset to https://huggingface.co/datasets/' + REPO_ID)
 
         # write simple dataset card
