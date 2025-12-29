@@ -1,14 +1,21 @@
 QA Summary
 ==========
-Total before dedup: 69783
-Total after dedup: 65928
-Duplicates removed: 3855
+Total before dedup: 24625
+Total after dedup: 13852
+Duplicates removed: 10773
 
-Content length - min: 33, median: 894.0, mean: 1955.836852323747, max: 91332
-Records >= 200 chars: 56110 (85.11% of filtered)
+Content length - min: 135, median: 170.0, mean: 171.28811723938782, max: 333
+Records >= 200 chars: 240 (1.73% of filtered)
 Have skills: 0
 Have experience entries: 0
-PII counts - emails: 0, urls: 0, phones: 55851, longnums: 0
+PII counts - emails: 0, urls: 0, phones: 0, longnums: 0
 
 Source distribution:
- - Resume-Collector-sample: 65928
+ - asaniczka__upwork-job-postings-dataset-2024-50k-records: 10060
+ - isaacoresanya__freelancer: 3143
+ - snehaanbhawal__resume-dataset: 356
+ - muhammadadiltalay__fiverr-data-gigs: 189
+ - gauravduttakiit__resume-dataset: 50
+ - rayyankauchali0__resume-dataset: 50
+ - datasetmaster__resumes: 2
+ - sample: 2

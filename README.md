@@ -167,3 +167,7 @@ This script supports chunked uploads for large datasets and verifies the Hugging
 - Ensure all API keys and environment variables are correctly set in the `.env` file.
 - Check the Hugging Face repository after upload: [https://huggingface.co/datasets/](https://huggingface.co/datasets/).
 - For large datasets, the upload script will automatically split the data into smaller chunks to ensure reliability.
+
+## Progress
+
+2025-12-28T22:23:56Z | upload_manifest created with 9 datasets, total_records=36344
