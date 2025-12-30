@@ -53,6 +53,8 @@ SAMBANOVA_API_BASE = "https://api.sambanova.ai/v1"
 GITHUB_API_BASE = "https://api.github.com"
 YOUR_SITE_URL = "https://github.com/aggressor-FZX/Resume-Collector"
 YOUR_APP_NAME = "ResumeCollectorImaginator"
+# Optional Hugging Face repo id for upload (owner/repo)
+HF_REPO_ID = os.getenv("HF_REPO_ID", "")
 
 # --- Model Cascade ---
 """
@@ -993,9 +995,12 @@ def main():
                         
                         logging.info(f"Successfully generated record with {model_used} ({provider}). Total: {len(generated_records) + num_initial_records}")
 
-                        # Upload to Hugging Face every 10 records
+                        # Upload to Hugging Face every 10 records (if repo configured)
                         if total_generated_this_run % 10 == 0:
-                            upload_to_huggingface(generated_records[-10:], HF_REPO_ID)
+                            if HF_REPO_ID:
+                                upload_to_huggingface(generated_records[-10:], HF_REPO_ID)
+                            else:
+                                logging.debug("HF_REPO_ID not set; skipping HF upload.")
                     else:
                         model_fail_counts[model_used] += 1
                         logging.error(f"Failed to generate record. Error: {error}. Model: {model_used}")
@@ -1045,7 +1050,10 @@ def main():
                     
                     logging.info(f"Successfully generated record with {model_used} ({provider}). Total: {len(generated_records) + num_initial_records}")
                     if total_generated_this_run % 10 == 0:
-                        upload_to_huggingface(generated_records[-10:], HF_REPO_ID)
+                        if HF_REPO_ID:
+                            upload_to_huggingface(generated_records[-10:], HF_REPO_ID)
+                        else:
+                            logging.debug("HF_REPO_ID not set; skipping HF upload.")
                 else:
                     model_fail_counts[model_used] += 1
                     logging.error(f"Failed to generate record. Error: {error}. Model: {model_used}")
