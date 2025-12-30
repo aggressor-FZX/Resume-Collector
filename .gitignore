@@ -124,3 +124,7 @@ htmlcov/
 
 # Taskmaster
 .taskmaster/
+
+anonymized_combined_resume_dataset.json
+data/anonymized_combined_resume_dataset.json
+data/filtered_resume_dataset.json
