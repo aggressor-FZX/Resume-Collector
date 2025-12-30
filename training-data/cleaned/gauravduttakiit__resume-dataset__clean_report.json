@@ -1,12 +1,3 @@
-{
-  "input_file": "training-data/cleaned/gauravduttakiit__resume-dataset.jsonl",
-  "output_file": "training-data/cleaned/gauravduttakiit__resume-dataset__cleaned.jsonl",
-  "total_input_records": 962,
-  "unique_outputs": 166,
-  "kept": 166,
-  "removed_exact_dup": 796,
-  "removed_by_cap": 0,
-  "redacted_count": 56,
-  "removed_other": 0,
-  "high_freq_outputs": 5
-}
+version https://git-lfs.github.com/spec/v1
+oid sha256:0a2dbe1182c8022963c75cd80da623990e49ec9351581c0bb83a248db38bf3ce
+size 363

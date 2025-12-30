@@ -1,12 +1,3 @@
-{
-  "input_file": "training-data/formatted/sample_run__pairs.jsonl",
-  "output_file": "training-data/formatted/sample_run__pairs__cleaned.jsonl",
-  "total_input_records": 2,
-  "unique_outputs": 2,
-  "kept": 2,
-  "removed_exact_dup": 0,
-  "removed_by_cap": 0,
-  "redacted_count": 0,
-  "removed_other": 0,
-  "high_freq_outputs": 0
-}
+version https://git-lfs.github.com/spec/v1
+oid sha256:e4eba895a45275e41ec56c52f7622e0cbaa7c08a4d125570b6e188d0d686e89d
+size 330

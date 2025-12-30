@@ -1,12 +1,3 @@
-{
-  "input_file": "training-data/formatted/snehaanbhawal__resume-dataset__pairs.jsonl",
-  "output_file": "training-data/formatted/snehaanbhawal__resume-dataset__pairs__cleaned.jsonl",
-  "total_input_records": 2482,
-  "unique_outputs": 418,
-  "kept": 497,
-  "removed_exact_dup": 0,
-  "removed_by_cap": 1985,
-  "redacted_count": 2481,
-  "removed_other": 0,
-  "high_freq_outputs": 3
-}
+version https://git-lfs.github.com/spec/v1
+oid sha256:3438e8f571336294c80b75bc9941b04a42a5cca99308842c5a6f4d4c8022c146
+size 381

@@ -1,12 +1,3 @@
-{
-  "input_file": "training-data/formatted/muhammadadiltalay__fiverr-data-gigs__pairs.jsonl",
-  "output_file": "training-data/formatted/muhammadadiltalay__fiverr-data-gigs__pairs__cleaned.jsonl",
-  "total_input_records": 2430,
-  "unique_outputs": 549,
-  "kept": 1717,
-  "removed_exact_dup": 0,
-  "removed_by_cap": 713,
-  "redacted_count": 2,
-  "removed_other": 0,
-  "high_freq_outputs": 33
-}
+version https://git-lfs.github.com/spec/v1
+oid sha256:7fd535c08f566f3c79780d2d7eac821af522181572074b288d66c21fe05e42ea
+size 391

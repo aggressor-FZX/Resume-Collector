@@ -1,12 +1,3 @@
-{
-  "input_file": "training-data/formatted/MikePfunk28__resume-training-dataset__pairs.jsonl",
-  "output_file": "training-data/formatted/MikePfunk28__resume-training-dataset__pairs__cleaned.jsonl",
-  "total_input_records": 0,
-  "unique_outputs": 0,
-  "kept": 0,
-  "removed_exact_dup": 0,
-  "removed_by_cap": 0,
-  "redacted_count": 0,
-  "removed_other": 0,
-  "high_freq_outputs": 0
-}
+version https://git-lfs.github.com/spec/v1
+oid sha256:abb43588a4e75ee94f1ce7fae74b094a69622753e17a995d018a56355aaf9329
+size 382

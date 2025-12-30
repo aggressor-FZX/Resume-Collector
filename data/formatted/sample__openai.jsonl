@@ -1,2 +1,3 @@
-{"messages":[{"role":"system","content":"You are a world-class tech resume writer. Transform weak, passive bullet points into powerful, metric-driven achievements. Context: General tech role"},{"role":"user","content":"Improve this resume bullet:\n\"\"Responsible for managing servers and fixing bugs\"\""},{"role":"assistant","content":"Delivered responsible, for, managing-based improvements by transforming ad-hoc tasks into repeatable, automated processes that improved productivity and accuracy for clients."}]}
-{"messages":[{"role":"system","content":"You are a world-class tech resume writer. Transform weak, passive bullet points into powerful, metric-driven achievements. Context: General tech role"},{"role":"user","content":"Improve this resume bullet:\n\"\"Worked on web app features\"\""},{"role":"assistant","content":"Delivered worked, web, app-based improvements by transforming ad-hoc tasks into repeatable, automated processes that improved productivity and accuracy for clients."}]}
+version https://git-lfs.github.com/spec/v1
+oid sha256:006d02ee1f40976b1912a70efc669da6680110eb8eab3042b4df385f65a9fc51
+size 1002

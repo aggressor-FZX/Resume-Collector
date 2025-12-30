@@ -1,12 +1,3 @@
-{
-  "input_file": "training-data/formatted/asaniczka__upwork-job-postings-dataset-2024-50k-records__pairs.jsonl",
-  "output_file": "training-data/formatted/asaniczka__upwork-job-postings-dataset-2024-50k-records__pairs__cleaned.jsonl",
-  "total_input_records": 52984,
-  "unique_outputs": 18605,
-  "kept": 26542,
-  "removed_exact_dup": 0,
-  "removed_by_cap": 26442,
-  "redacted_count": 343,
-  "removed_other": 0,
-  "high_freq_outputs": 271
-}
+version https://git-lfs.github.com/spec/v1
+oid sha256:168ae01838e345076462ac412f894efd3e3c0101a67baa2881e45380d003bbc7
+size 440
