@@ -23,6 +23,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from itertools import cycle
 import threading
 import signal
+from datasets import Dataset
+from huggingface_hub import HfApi, login
 
 # --- Logging Setup ---
 logging.basicConfig(level=logging.INFO,
@@ -37,6 +39,9 @@ OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 GITHUB_API_KEY = os.getenv("GITHUB_API_KEY")
+HF_TOKEN = os.getenv("HF_TOKEN")
+HF_REPO_ID = "aggressor-FZX/Imaginator-Generated-Data"
+
 OPENROUTER_API_BASE = "https://openrouter.ai/api/v1"
 GITHUB_API_BASE = "https://api.github.com"
 YOUR_SITE_URL = "https://github.com/aggressor-FZX/Resume-Collector"
@@ -59,14 +64,12 @@ MODEL_CASCADE = [
     "meta-llama/llama-3.1-405b-instruct:free",
     "openai/gpt-oss-120b:free",
     "meta-llama/llama-3.3-70b-instruct:free",
-    "google/gemini-2.0-flash-exp:free",
-    "mistralai/devstral-2512:free",
-    "allenai/olmo-3.1-32b-think:free",
     "google/gemma-3-27b-it:free",
 ]
 
 model_cycler = cycle(MODEL_CASCADE)
 model_lock = threading.Lock()
+api_call_semaphore = threading.Semaphore(1)
 
 def get_next_model():
     with model_lock:
@@ -193,27 +196,28 @@ def make_api_call(prompt_messages, model):
     if not model:
         return None, "No more models available in the free tier list."
 
-    print(f"  Attempting generation with model: {model}...")
+    logging.info(f"  Attempting generation with model: {model}...")
     try:
-        response = requests.post(
-            url=f"{OPENROUTER_API_BASE}/chat/completions",
-            headers={
-                "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-                "HTTP-Referer": YOUR_SITE_URL,
-                "X-Title": YOUR_APP_NAME,
-            },
-            json={
-                "model": model,
-                "messages": prompt_messages,
-                "response_format": {"type": "json_object"},
-            },
-            timeout=180
-        )
+        with api_call_semaphore:
+            response = requests.post(
+                url=f"{OPENROUTER_API_BASE}/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+                    "HTTP-Referer": YOUR_SITE_URL,
+                    "X-Title": YOUR_APP_NAME,
+                },
+                json={
+                    "model": model,
+                    "messages": prompt_messages,
+                    "response_format": {"type": "json_object"},
+                },
+                timeout=180
+            )
         response.raise_for_status()
         return response.json()['choices'][0]['message']['content'], None
     except requests.exceptions.RequestException as e:
         error_message = f"API call failed for model {model}: {e}"
-        print(f"    - {error_message}")
+        logging.error(f"    - {error_message}")
         return None, error_message
 
 def parse_json_from_response(response_text: str):
@@ -245,14 +249,17 @@ def generate_scenario_and_solution(resume_text):
     
     # --- Retry logic for robust scenario generation ---
     max_retries = len(MODEL_CASCADE)
+    scenario_succeeded = False
     for i in range(max_retries):
         scenario_response_str, error = make_api_call(prompt_step1, current_model)
         if not error:
+            scenario_succeeded = True
+            time.sleep(1) # Wait 1 second after a successful call
             break
-        print(f"  Worker failed with {current_model}. Retrying with next model...")
+        logging.warning(f"  Worker failed with {current_model}. Retrying with next model...")
         current_model = get_next_model()
     
-    if error:
+    if not scenario_succeeded:
         return None, f"Failed to generate scenario after {max_retries} retries.", current_model
 
     scenario, parse_error = parse_json_from_response(scenario_response_str)
@@ -321,10 +328,18 @@ Task: Rewrite the Experience section to target this new role, using the inferred
         {"role": "user", "content": user_prompt_context}
     ]
 
-    solution_text, error = make_api_call(prompt_step2, current_model)
-    if error:
-        # We don't advance the model here, as the first call succeeded.
-        return None, error, current_model
+    solution_succeeded = False
+    for i in range(max_retries):
+        solution_text, error = make_api_call(prompt_step2, current_model)
+        if not error:
+            solution_succeeded = True
+            time.sleep(1) # Wait 1 second after a successful call
+            break
+        logging.warning(f"  Worker failed (solution) with {current_model}. Retrying with next model...")
+        current_model = get_next_model()
+
+    if not solution_succeeded:
+        return None, f"Failed to generate solution after {max_retries} retries.", current_model
 
     # Assemble the final record
     final_record = {
@@ -332,7 +347,8 @@ Task: Rewrite the Experience section to target this new role, using the inferred
         "job_ad_text": scenario.get("job_ad_text"),
         "extracted_skills_json": scenario.get("extracted_skills_json"),
         "domain_insights_json": scenario.get("domain_insights_json"),
-        "messages": prompt_step2 + [{"role": "assistant", "content": solution_text}]
+        "messages": prompt_step2 + [{"role": "assistant", "content": solution_text}],
+        "model_used": current_model # Store the model that successfully generated the record
     }
 
     return final_record, None, current_model
@@ -378,8 +394,27 @@ def timeout_handler(signum, frame):
 
 signal.signal(signal.SIGALRM, timeout_handler)
 
+def upload_to_huggingface(data_records, repo_id, split="train"):
+    """
+    Uploads a list of data records to a Hugging Face Dataset repository.
+    """
+    if not HF_TOKEN:
+        logging.warning("HF_TOKEN not set. Skipping Hugging Face upload.")
+        return
+
+    if not data_records:
+        return
+
+    try:
+        # Convert records to Hugging Face Dataset format
+        dataset = Dataset.from_list(data_records)
+        dataset.push_to_hub(repo_id, split=split, private=False)
+        logging.info(f"Successfully uploaded {len(data_records)} records to Hugging Face Hub: {repo_id}/{split}")
+    except Exception as e:
+        logging.error(f"Failed to upload to Hugging Face Hub: {e}")
+
 def main():
-    signal.alarm(25 * 60)  # Set a 25-minute alarm
+    signal.alarm(5 * 3600)  # Set a 5-hour alarm
     try:
         parser = argparse.ArgumentParser(description="Generate Imaginator dataset using a cascade of free models.")
         parser.add_argument("--num_examples", type=int, default=50, help="Number of examples to generate.")
@@ -415,25 +450,111 @@ def main():
         num_to_generate = min(args.num_examples, len(seed_profiles))
         logging.info(f"Using {num_to_generate} seed profiles. Will generate {num_to_generate} examples with {args.workers} workers.")
         
+        num_initial_records = 0
+        output_path = OUTPUT_DIR / args.output_file
+        if args.append and output_path.exists():
+            with output_path.open('r', encoding='utf-8') as f:
+                num_initial_records = sum(1 for _ in f)
+
         generated_records = []
+        model_success_counts = defaultdict(int)
+        model_fail_counts = defaultdict(int)
+        total_generated_this_run = 0
 
         start_time = time.perf_counter()
+        last_record_count_print_time = start_time
+        last_total_time_print_time = start_time
+
+        denied_request_cooldown_active = False
+        cooldown_end_time = 0
+
+        # Create a queue to hold profiles that need to be processed
+        profile_queue = queue.Queue()
+        for profile in seed_profiles:
+            profile_queue.put(profile)
 
         with ThreadPoolExecutor(max_workers=args.workers) as executor:
-            futures = {executor.submit(generate_scenario_and_solution, profile): profile for profile in seed_profiles}
-            for future in as_completed(futures):
+            futures_to_profile = {}
+            while total_generated_this_run < num_to_generate and (not profile_queue.empty() or futures_to_profile):
+                if denied_request_cooldown_active and time.perf_counter() < cooldown_end_time:
+                    remaining_cooldown = int(cooldown_end_time - time.perf_counter())
+                    logging.info(f"Cooldown active. Pausing for {remaining_cooldown} seconds...")
+                    time.sleep(min(remaining_cooldown, 30)) # Sleep in chunks during cooldown
+                    continue
+
+                # Submit new tasks if workers are free and there are profiles to process
+                while len(futures_to_profile) < args.workers and not profile_queue.empty():
+                    profile = profile_queue.get()
+                    future = executor.submit(generate_scenario_and_solution, profile)
+                    futures_to_profile[future] = profile
+                    time.sleep(0.1) # Stagger worker submissions to prevent calls at exactly the same time
+
+                # Process completed futures
+                done_futures = [f for f in futures_to_profile if f.done()]
+                for future in done_futures:
+                    profile = futures_to_profile.pop(future) # Get the original profile back
+                    record, error, model_used = future.result()
+                    if record:
+                        generated_records.append(record)
+                        total_generated_this_run += 1
+                        model_success_counts[model_used] += 1
+                        logging.info(f"Successfully generated record with {model_used}. Total: {len(generated_records) + num_initial_records}")
+
+                        # Upload to Hugging Face every 10 records
+                        if total_generated_this_run % 10 == 0:
+                            upload_to_huggingface(generated_records[-10:], HF_REPO_ID)
+                    else:
+                        model_fail_counts[model_used] += 1
+                        logging.error(f"Failed to generate record. Error: {error}. Model: {model_used}")
+                        
+                        # Check for repeated denied requests to trigger cooldown
+                        if "429 Client Error" in error or "Too Many Requests" in error:
+                            logging.warning("Repeated denied requests detected. Activating 5-minute cooldown.")
+                            denied_request_cooldown_active = True
+                            cooldown_end_time = time.perf_counter() + (5 * 60) # 5 minutes
+                        
+                        # If a profile failed, put it back in the queue to be retried by another model/worker
+                        # but only if it hasn't exhausted all models already
+                        if "Failed to generate scenario after" not in error and "Failed to generate solution after" not in error:
+                            profile_queue.put(profile) # Re-queue the original profile
+
+                # Periodic printouts
+                current_time = time.perf_counter()
+                if current_time - last_record_count_print_time >= 60: # Every 1 minute
+                    logging.info(f"Records generated so far: {len(generated_records) + num_initial_records}")
+                    last_record_count_print_time = current_time
+                
+                if current_time - last_total_time_print_time >= 300: # Every 5 minutes
+                    elapsed_time = current_time - start_time
+                    logging.info(f"Total time elapsed: {elapsed_time:.2f} seconds.")
+                    last_total_time_print_time = current_time
+
+                # Prevent busy-waiting if no futures are ready yet
+                if not done_futures and futures_to_profile:
+                    time.sleep(0.5)
+            
+            # Ensure all remaining futures are completed before exiting the executor
+            for future in as_completed(futures_to_profile):
+                profile = futures_to_profile.pop(future)
                 record, error, model_used = future.result()
                 if record:
                     generated_records.append(record)
-                    print(f"  Successfully generated record with {model_used}.")
+                    total_generated_this_run += 1
+                    model_success_counts[model_used] += 1
+                    logging.info(f"Successfully generated record with {model_used}. Total: {len(generated_records) + num_initial_records}")
+                    if total_generated_this_run % 10 == 0:
+                        upload_to_huggingface(generated_records[-10:], HF_REPO_ID)
                 else:
-                    print(f"  Failed to generate record. Error: {error}")
+                    model_fail_counts[model_used] += 1
+                    logging.error(f"Failed to generate record. Error: {error}. Model: {model_used}")
+                    # No re-queuing here, as the loop has already finished its main iteration
 
         end_time = time.perf_counter()
-        print(f"\n--- Generation Complete ---")
-        print(f"Successfully generated {len(generated_records)} out of {num_to_generate} targeted examples.")
-        print(f"Total time taken: {end_time - start_time:.2f} seconds")
-
+        logging.info(f"\n--- Generation Complete ---")
+        logging.info(f"Successfully generated {len(generated_records)} out of {num_to_generate} targeted examples this run.")
+        logging.info(f"Total records in file (including appended): {len(generated_records) + num_initial_records}")
+        logging.info(f"Total time taken this run: {end_time - start_time:.2f} seconds")
+        
         output_path = OUTPUT_DIR / args.output_file
         mode = 'a' if args.append else 'w'
         with output_path.open(mode, encoding='utf-8') as f:
@@ -442,8 +563,18 @@ def main():
         
         logging.info(f"Saved generated data to {output_path}")
 
-        if len(generated_records) < num_to_generate:
-            remaining = num_to_generate - len(generated_records)
+        # Calculate and print source percentages
+        total_successful_records = sum(model_success_counts.values())
+        if total_successful_records > 0:
+            logging.info("\n--- Model Contribution Percentages ---")
+            for model, count in model_success_counts.items():
+                percentage = (count / total_successful_records) * 100
+                logging.info(f"- {model}: {percentage:.2f}% ({count} records)")
+        else:
+            logging.info("\nNo records successfully generated to calculate percentages.")
+
+        if total_generated_this_run < num_to_generate:
+            remaining = num_to_generate - total_generated_this_run
             logging.warning(f"--- ACTION REQUIRED ---")
             logging.warning(f"{remaining} records could not be generated with the free tier.")
             logging.warning("You can now run the paid generation script to complete the dataset.")
