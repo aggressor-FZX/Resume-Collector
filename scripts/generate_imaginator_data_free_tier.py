@@ -24,10 +24,11 @@ from itertools import cycle
 import threading
 import signal
 from datasets import Dataset
-from huggingface_hub import HfApi, login
+from huggingface_hub import HfApi, login, InferenceClient
 from collections import defaultdict
 import queue
 import subprocess
+from openai import OpenAI # For SambaNova/Groq integration
 
 # --- Logging Setup ---
 logging.basicConfig(level=logging.INFO,
@@ -42,41 +43,207 @@ OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 GITHUB_API_KEY = os.getenv("GITHUB_API_KEY")
-HF_TOKEN = os.getenv("HF_TOKEN")
-HF_REPO_ID = "aggressor-FZX/Imaginator-Generated-Data"
+# Use .env Hugging Face key for uploads and API
+HF_TOKEN = os.getenv("HUGGING_FACE_API_KEY") or os.getenv("HF_TOKEN")
+SAMBA_API_KEY = os.getenv("SAMBA_API_KEY")
 
 OPENROUTER_API_BASE = "https://openrouter.ai/api/v1"
+HF_API_BASE = "https://api-inference.huggingface.co/v1"
+SAMBANOVA_API_BASE = "https://api.sambanova.ai/v1"
 GITHUB_API_BASE = "https://api.github.com"
 YOUR_SITE_URL = "https://github.com/aggressor-FZX/Resume-Collector"
 YOUR_APP_NAME = "ResumeCollectorImaginator"
 
 # --- Model Cascade ---
+"""
+Expanded model cascade to include top Hugging Face open-weight models (as of late 2025):
+  - deepseek-ai/DeepSeek-R1 (671B MoE)
+  - meta-llama/Llama-3.3-70B-Instruct (70B)
+  - Qwen/Qwen2.5-72B-Instruct (72B)
+  - mistralai/Mistral-Large-Instruct-2407 (123B)
+  - CohereForAI/c4ai-command-r-plus (104B)
+  - Qwen/Qwen2.5-Coder-32B-Instruct (32B)
+  - deepseek-ai/DeepSeek-R1-Distill-Qwen-32B (32B)
+  - Qwen/Qwen2.5-VL-72B-Instruct (72B, multimodal)
+  - google/gemma-2-27b-it (27B)
+  - mistralai/Mistral-Small-Instruct-2407 (24B)
+  - tiiuae/falcon-11b (11B)
+  - plus legacy OpenRouter free models for fallback.
+"""
 MODEL_CASCADE = [
-    "z-ai/glm-4.5-air:free",
-    "tngtech/deepseek-r1t-chimera:free",
+    # SambaNova Production Models (>17B)
+    "DeepSeek-R1-0528",
+    "DeepSeek-V3.1",
+    "DeepSeek-R1-Distill-Llama-70B",
+    "Meta-Llama-3.3-70B-Instruct",
+    # SambaNova Preview Models (>17B)
+    "Llama-4-Maverick-17B-128E-Instruct",
+    "gpt-oss-120b",
+    "Qwen3-32B",
+    "Llama-3.3-Swallow-70B-Instruct-v0.4",
+    # Hugging Face Inference API models (open-weight, >10B), prioritized for free tier
+    "deepseek-ai/DeepSeek-R1-Distill-Qwen-32B", # Best balance of logic/speed on free tier
+    "meta-llama/Llama-3.3-70B-Instruct",
+    "Qwen/Qwen2.5-72B-Instruct",
+    # Legacy OpenRouter free models (for fallback)
+
     "nex-agi/deepseek-v3.1-nex-n1:free",
-    "google/gemma-3-4b-it:free",
-    "google/gemini-2.0-flash-exp:free",
-    "mistralai/devstral-2512:free",
-    "xiaomi/mimo-v2-flash:free",
-    "kwaipilot/kat-coder-pro:free",
-    "deepseek/deepseek-r1-0528:free",
-    "qwen/qwen3-coder:free",
-    "moonshotai/kimi-k2:free",
-    "nousresearch/hermes-3-llama-3.1-405b:free",
-    "meta-llama/llama-3.1-405b-instruct:free",
-    "openai/gpt-oss-120b:free",
-    "meta-llama/llama-3.3-70b-instruct:free",
+
     "google/gemma-3-27b-it:free",
+    # Paid OpenRouter models (for dedicated pool of 3 workers)
+    "NousResearch/Hermes-4.3-36B",
+    "TheDrummer/Rocinante-12B-v1.1",
+    "deepseek-ai/DeepSeek-V3.2-Exp",
+    "TheDrummer/Skyfall-36B-v2",
+    "deepseek-ai/DeepSeek-V3.2-Speciale",
 ]
+
+HF_MODELS = {
+    "deepseek-ai/DeepSeek-R1-Distill-Qwen-32B",
+    "meta-llama/Llama-3.3-70B-Instruct",
+    "Qwen/Qwen2.5-72B-Instruct",
+}
 
 model_cycler = cycle(MODEL_CASCADE)
 model_lock = threading.Lock()
-api_call_semaphore = threading.Semaphore(1)
+# Track temporary cooldowns (timestamp) for models that hit rate limits
+model_cooldowns = {}
+# Models that are disabled for the duration of this run (e.g., 410 Gone)
+banned_models = set()
+# Rate limit for OpenRouter free tier is ~300 requests per hour (~1 req/sec). SambaNova/HF also have limits.
+# Make OpenRouter free-tier concurrency configurable via env var OPENROUTER_CONCURRENCY (default 9).
+OPENROUTER_CONCURRENCY = int(os.getenv("OPENROUTER_CONCURRENCY", "9"))
+api_call_semaphore = threading.Semaphore(OPENROUTER_CONCURRENCY) # Allows concurrent OpenRouter free-tier calls
+# Limit concurrent SambaNova requests to 3
+samba_semaphore = threading.Semaphore(3)
+# Limit concurrent paid OpenRouter requests to 3
+paid_openrouter_semaphore = threading.Semaphore(3)
+
+# Toggle used to alternate preference between Samba and paid providers (thread-safe by using model_lock)
+prefer_paid_toggle = False
+
+
+def is_samba_model(model: str) -> bool:
+    """Detect SambaNova model ids (they are bare ids without owner slash or OpenRouter ':free' suffix)."""
+    return (":" not in model) and ("/" not in model)
+
+
+def is_paid_openrouter_model(model: str) -> bool:
+    """Detects if a model is a paid OpenRouter model based on its ID structure.
+    Paid OpenRouter models do not have ':free' in their ID but do typically
+    have an owner/model_name structure.
+    """
+    # A rough heuristic: if it has a slash and is NOT a SambaNova model, and is NOT a free OpenRouter model
+    return ("/" in model) and (":free" not in model) and (not is_samba_model(model))
+
+# --- Paid OpenRouter rotation ---
+PAID_OPENROUTER_MODELS = [m for m in MODEL_CASCADE if is_paid_openrouter_model(m)]
+paid_model_cycler = cycle(PAID_OPENROUTER_MODELS) if PAID_OPENROUTER_MODELS else None
+
 
 def get_next_model():
+    """Return the next available model, skipping banned models and those on cooldown.
+    If all models are on cooldown, wait until the earliest cooldown expires.
+    """
     with model_lock:
-        return next(model_cycler)
+        start_model = next(model_cycler)
+        current_model = start_model
+
+        # Alternate preference between Samba and paid models to distribute usage and ensure paid models rotate even when Samba is available.
+        # Use the `prefer_paid_toggle` to alternate each time this function is called (thread-safe via model_lock).
+        global prefer_paid_toggle
+        prefer_paid = prefer_paid_toggle
+        prefer_paid_toggle = not prefer_paid_toggle
+
+        def try_prefer_samba_first():
+            try:
+                if samba_semaphore.acquire(blocking=False):
+                    # Immediately release - we only check availability here
+                    samba_semaphore.release()
+                    for m in MODEL_CASCADE:
+                        if is_samba_model(m) and m not in banned_models:
+                            cooldown_until = model_cooldowns.get(m)
+                            if not cooldown_until or time.time() >= cooldown_until:
+                                logging.debug(f"Preferring Samba model: {m}")
+                                return m
+            except Exception:
+                pass
+            return None
+
+        def try_prefer_paid_first():
+            try:
+                if paid_openrouter_semaphore.acquire(blocking=False):
+                    paid_openrouter_semaphore.release()
+                    # Use a dedicated cycler for paid models to rotate through them fairly and avoid constant retries
+                    if paid_model_cycler:
+                        for _ in range(len(PAID_OPENROUTER_MODELS)):
+                            m = next(paid_model_cycler)
+                            if m in banned_models:
+                                logging.debug(f"Skipping banned paid model: {m}")
+                                continue
+                            cooldown_until = model_cooldowns.get(m)
+                            if cooldown_until and time.time() < cooldown_until:
+                                logging.debug(f"Paid model {m} on cooldown until {cooldown_until}. Skipping.")
+                                continue
+                            logging.debug(f"Preferring paid OpenRouter model (rotated): {m}")
+                            return m
+                    else:
+                        # Fallback: scan the model cascade if no paid cycler is configured
+                        for m in MODEL_CASCADE:
+                            if is_paid_openrouter_model(m) and m not in banned_models:
+                                cooldown_until = model_cooldowns.get(m)
+                                if not cooldown_until or time.time() >= cooldown_until:
+                                    logging.debug(f"Preferring paid OpenRouter model: {m}")
+                                    return m
+            except Exception:
+                pass
+            return None
+
+        # Try in the selected order
+        if prefer_paid:
+            paid_choice = try_prefer_paid_first()
+            if paid_choice:
+                return paid_choice
+            samba_choice = try_prefer_samba_first()
+            if samba_choice:
+                return samba_choice
+        else:
+            samba_choice = try_prefer_samba_first()
+            if samba_choice:
+                return samba_choice
+            paid_choice = try_prefer_paid_first()
+            if paid_choice:
+                return paid_choice
+
+        while True:
+            # Skip if explicitly banned for this run
+            if current_model in banned_models:
+                logging.debug(f"Skipping banned model: {current_model}")
+                current_model = next(model_cycler)
+                if current_model == start_model:
+                    logging.error("All models are banned for this run. Waiting briefly before retrying.")
+                    time.sleep(5)
+                    continue
+                continue
+
+            # Skip models currently on cooldown
+            cooldown_until = model_cooldowns.get(current_model)
+            if cooldown_until and time.time() < cooldown_until:
+                logging.debug(f"Model {current_model} on cooldown until {cooldown_until}. Skipping.")
+                current_model = next(model_cycler)
+                if current_model == start_model:
+                    # All models are on cooldown — wait until the earliest cooldown ends
+                    earliest = min(model_cooldowns.values())
+                    sleep_time = max(0, earliest - time.time())
+                    logging.info(f"All models on cooldown. Sleeping for {sleep_time + 1:.1f}s until a model is available.")
+                    time.sleep(sleep_time + 1)
+                continue
+
+            # Model is available
+            # Remove stale cooldowns
+            if current_model in model_cooldowns and (not model_cooldowns[current_model] or time.time() >= model_cooldowns[current_model]):
+                del model_cooldowns[current_model]
+            return current_model
 
 def fetch_github_profiles(num_profiles: int):
     """
@@ -264,11 +431,24 @@ def load_local_github_seeds(local_path: str, sample_size: int):
     return random.sample(arr, min(sample_size, len(arr)))
 
 def make_api_call(prompt_messages, model):
-    """Makes a call to the OpenRouter API with a given model and prompt."""
+    """
+    Dispatcher: OpenRouter if model contains ':free', Hugging Face if it contains '/', otherwise SambaNova (bare id).
+    """
     if not model:
-        return None, "No more models available in the free tier list."
+        return None, "No more models available in the cascade."
 
-    logging.info(f"  Attempting generation with model: {model}...")
+    if ":free" in model:
+        return make_openrouter_api_call(prompt_messages, model)
+    elif model in HF_MODELS:
+        return make_hf_api_call(prompt_messages, model)
+    elif is_paid_openrouter_model(model):
+        return make_paid_openrouter_api_call(prompt_messages, model)
+    else:
+        return make_sambanova_api_call(prompt_messages, model)
+
+def make_openrouter_api_call(prompt_messages, model):
+    """Makes a call to the OpenRouter API with a given model and prompt."""
+    logging.info(f"  Attempting generation with OpenRouter model: {model}...")
     try:
         with api_call_semaphore:
             response = requests.post(
@@ -290,10 +470,190 @@ def make_api_call(prompt_messages, model):
     except requests.exceptions.RequestException as e:
         error_message = f"API call failed for model {model}: {e}"
         logging.error(f"    - {error_message}")
+        # Check for 402 Payment Required to detect exhausted monthly credits
+        if e.response and e.response.status_code == 402:
+            logging.warning("OpenRouter free credits may be exhausted (402 Payment Required).")
+        elif e.response and e.response.status_code == 400: # Add 400 to banned models
+            banned_models.add(model)
+            error_message += ". Model returned 400 Bad Request; banning for the remainder of this run."
         return None, error_message
 
+def make_paid_openrouter_api_call(prompt_messages, model):
+    """Makes a call to the OpenRouter API with a paid model and prompt.
+    Uses a semaphore to limit concurrency.
+    """
+    if not OPENROUTER_API_KEY:
+        return None, "OPENROUTER_API_KEY not set for paid OpenRouter model call."
+
+    logging.info(f"  Attempting generation with Paid OpenRouter model: {model}...")
+    acquired = False
+    try:
+        acquired = paid_openrouter_semaphore.acquire(blocking=False)
+        if not acquired:
+            return None, "Paid OpenRouter concurrency limit reached; try next model."
+
+        time.sleep(0.5) # Add a small delay to further space out requests
+
+        response = requests.post(
+            url=f"{OPENROUTER_API_BASE}/chat/completions",
+            headers={
+                "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+                "HTTP-Referer": YOUR_SITE_URL,
+                "X-Title": YOUR_APP_NAME,
+            },
+            json={
+                "model": model,
+                "messages": prompt_messages,
+                "response_format": {"type": "json_object"},
+            },
+            timeout=180
+        )
+        response.raise_for_status()
+        return response.json()['choices'][0]['message']['content'], None
+    except requests.exceptions.RequestException as e:
+        error_message = f"API call failed for paid OpenRouter model {model}: {e}"
+        logging.error(f"    - {error_message}")
+        if e.response and e.response.status_code == 402:
+            logging.warning("OpenRouter paid credits may be exhausted (402 Payment Required).")
+        elif e.response and e.response.status_code in [400, 404]:
+            banned_models.add(model)
+            error_message += ". Model returned 400/404; banning for the remainder of this run."
+        elif e.response and e.response.status_code in [429, 503]:
+            cooldown_seconds = 600  # 10 minutes
+            model_cooldowns[model] = time.time() + cooldown_seconds
+            error_message += f". Model is rate-limited or unavailable. Placing on cooldown for {cooldown_seconds} seconds."
+        return None, error_message
+    finally:
+        if acquired:
+            try:
+                paid_openrouter_semaphore.release()
+            except Exception:
+                pass
+
+def make_hf_api_call(prompt_messages, model):
+    """Makes a call to the Hugging Face Inference API with a given model and prompt."""
+    if not HF_TOKEN:
+        return None, "HUGGING_FACE_API_KEY not set for HF model call."
+
+    logging.info(f"  Attempting generation with HF model: {model}...")
+    try:
+        with api_call_semaphore:
+            client = InferenceClient(model=model, token=HF_TOKEN)
+
+            # Use the chat interface - it handles the prompt template for you
+            response = client.chat.completions.create(
+                model=model,
+                messages=prompt_messages, # Directly pass the messages array
+                max_tokens=2048, # Increased token limit for generation
+                stream=False,
+                temperature=0.7,
+                top_p=0.9,
+                seed=random.randint(0, 1000000), # Use a random seed for diverse outputs
+            )
+
+        return response.choices[0].message.content, None
+    except Exception as e:
+        err_str = str(e)
+        error_message = f"API call failed for HF model {model}: {err_str}"
+        # Treat model-not-found or similar as a ban for this run
+        if "model not found" in err_str.lower() or "does not exist" in err_str.lower() or "model_not_found" in err_str.lower():
+            banned_models.add(model)
+            error_message += ". Model not found for HF inference; banning for the remainder of this run."
+            logging.error(f"    - {error_message}")
+            return None, error_message
+        # InferenceClient raises InferenceTimeoutError for timeouts or model loading (similar to 503)
+        if "InferenceTimeoutError" in err_str:
+            error_message += ". Model may be loading or timed out; will be retried later in the cascade."
+            # No explicit cooldown for InferenceTimeoutError here, rely on client's internal retries
+        elif "410 Client Error: Gone" in err_str:
+            banned_models.add(model)
+            error_message += ". Model returned 410 Gone; disabling for the remainder of this run."
+        elif "429 Client Error" in err_str or "503 Service Unavailable" in err_str or "Too Many Requests" in err_str:
+            cooldown_seconds = 600  # 10 minutes (increased due to persistent rate limiting)
+            model_cooldowns[model] = time.time() + cooldown_seconds
+            error_message += f". Model is rate-limited or unavailable. Placing on cooldown for {cooldown_seconds} seconds."
+        logging.error(f"    - {error_message}")
+        return None, error_message
+    except requests.exceptions.RequestException as e:
+        error_message = f"API call failed for HF model {model}: {e}"
+        # Treat 410 Gone as a sign the model is not available for this run; ban it.
+        if hasattr(e, 'response') and e.response and e.response.status_code == 410:
+            banned_models.add(model)
+            error_message += ". Model returned 410 Gone; disabling for the remainder of this run."
+        # Check for rate-limiting or service unavailable errors to trigger a cooldown
+        elif hasattr(e, 'response') and e.response and e.response.status_code in [429, 503]:
+            cooldown_seconds = 600  # 10 minutes (increased due to persistent rate limiting)
+            model_cooldowns[model] = time.time() + cooldown_seconds
+            error_message += f". Model is rate-limited or unavailable. Placing on cooldown for {cooldown_seconds} seconds."
+        logging.error(f"    - {error_message}")
+        return None, error_message
+
+def make_sambanova_api_call(prompt_messages, model):
+    """Makes a call to the SambaNova API with a given model and prompt.
+    Uses a semaphore to limit concurrency and bans models that do not exist on SambaNova.
+    """
+    if not SAMBA_API_KEY:
+        return None, "SAMBANOVA_API_KEY not set for SambaNova model call."
+
+    logging.info(f"  Attempting generation with SambaNova model: {model}...")
+    acquired = False
+    try:
+        # Try to acquire a Samba slot without blocking; if none available, let caller try next model
+        acquired = samba_semaphore.acquire(blocking=False)
+        if not acquired:
+            return None, "Samba concurrency limit reached; try next model."
+
+        # Add a small delay to further space out requests, even with the semaphore
+        time.sleep(0.5)
+
+        client = OpenAI(
+            base_url=SAMBANOVA_API_BASE,
+            api_key=SAMBA_API_KEY,
+            max_retries=0, # Exponential backoff retries for rate limits or transient errors
+            timeout=180, # Global timeout for the request
+        )
+        
+        # SambaNova uses OpenAI-compatible chat completions
+        response = client.chat.completions.create(
+            model=model,
+            messages=prompt_messages,
+            max_tokens=2048,
+            temperature=0.7,
+        )
+        return response.choices[0].message.content, None
+    except Exception as e:
+        error_message = f"API call failed for SambaNova model {model}: {e}"
+        # If Samba returns a 400/404 indicating model not found, ban it for this run
+        try:
+            if hasattr(e, 'response') and e.response and getattr(e.response, 'status_code', None) in [400, 404]:
+                banned_models.add(model)
+                error_message += ". Model not found on SambaNova; banning for the remainder of this run."
+            elif hasattr(e, 'response') and e.response and getattr(e.response, 'status_code', None) == 429:
+                cooldown_seconds = 600  # 10 minutes
+                model_cooldowns[model] = time.time() + cooldown_seconds
+                error_message += f". Model is rate-limited. Placing on cooldown for {cooldown_seconds} seconds."
+        except Exception:
+            pass
+        logging.error(f"    - {error_message}")
+        return None, error_message
+    finally:
+        if acquired:
+            try:
+                samba_semaphore.release()
+            except Exception:
+                pass
+
 def parse_json_from_response(response_text: str):
-    """Extracts a JSON object from a model's text response, even with surrounding text."""
+    """Extracts a JSON object from a model's text response, cleaning markdown code fences."""
+    
+    # Clean markdown fences
+    if response_text.strip().startswith("```json"):
+        response_text = response_text.strip()[7:]
+    if response_text.strip().startswith("```"):
+        response_text = response_text.strip()[3:]
+    if response_text.strip().endswith("```"):
+        response_text = response_text.strip()[:-3]
+
     # Find the start and end of the JSON object
     start_brace = response_text.find('{')
     end_brace = response_text.rfind('}')
@@ -304,8 +664,9 @@ def parse_json_from_response(response_text: str):
     json_str = response_text[start_brace:end_brace+1]
     try:
         return json.loads(json_str), None
-    except json.JSONDecodeError:
-        return None, "Failed to parse the extracted JSON object."
+    except json.JSONDecodeError as e:
+        error_msg = f"Failed to parse extracted JSON. Error: {e}. Substring: '{json_str[:200]}...'"
+        return None, error_msg
 
 def generate_scenario_and_solution(resume_text):
     """
@@ -326,7 +687,7 @@ def generate_scenario_and_solution(resume_text):
         scenario_response_str, error = make_api_call(prompt_step1, current_model)
         if not error:
             scenario_succeeded = True
-            time.sleep(1) # Wait 1 second after a successful call
+            time.sleep(1.1) # Wait 1.1 second after a successful call
             break
         logging.warning(f"  Worker failed with {current_model}. Retrying with next model...")
         current_model = get_next_model()
@@ -405,7 +766,7 @@ Task: Rewrite the Experience section to target this new role, using the inferred
         solution_text, error = make_api_call(prompt_step2, current_model)
         if not error:
             solution_succeeded = True
-            time.sleep(1) # Wait 1 second after a successful call
+            time.sleep(1.1) # Wait 1.1 second after a successful call
             break
         logging.warning(f"  Worker failed (solution) with {current_model}. Retrying with next model...")
         current_model = get_next_model()
@@ -434,8 +795,8 @@ def process_profile(profile, thread_name):
     logging.info(f"Starting processing for a profile.")
     current_model = get_next_model()
     
-    # Add a 1-second delay to be respectful of the APIs
-    time.sleep(1)
+    # Add a 1.1-second delay to be respectful of the APIs
+    time.sleep(1.1)
 
     if not current_model:
         logging.warning("All free models have been tried and failed. Stopping generation for this profile.")
@@ -452,6 +813,7 @@ def process_profile(profile, thread_name):
             current_model = get_next_model() # Move to the next model
             if current_model:
                 logging.info(f"Switching to next model: {current_model}")
+                time.sleep(1.1)  # Wait 1.1 second between retries to be respectful
             else:
                 logging.warning("All models exhausted for this record.")
                 return None
@@ -465,6 +827,13 @@ def timeout_handler(signum, frame):
     raise TimeoutException
 
 signal.signal(signal.SIGALRM, timeout_handler)
+# Also handle SIGTERM and SIGINT to allow graceful shutdown and final summary
+try:
+    signal.signal(signal.SIGTERM, timeout_handler)
+    signal.signal(signal.SIGINT, timeout_handler)
+except Exception:
+    # Signal may not be available on some platforms (Windows) - ignore in that case
+    pass
 
 def upload_to_huggingface(data_records, repo_id, split="train"):
     """
@@ -485,7 +854,37 @@ def upload_to_huggingface(data_records, repo_id, split="train"):
     except Exception as e:
         logging.error(f"Failed to upload to Hugging Face Hub: {e}")
 
+def finalize_run(generated_records, num_initial_records, output_path, model_success_counts, start_time):
+    """Write generated records to file and log a concise summary (used in normal and graceful exits)."""
+    end_time = time.perf_counter()
+    total_generated_this_run = len(generated_records)
+
+    mode = 'a' if output_path.exists() and output_path.stat().st_size > 0 else 'w'
+    try:
+        with output_path.open(mode, encoding='utf-8') as f:
+            for record in generated_records:
+                f.write(json.dumps(record) + '\n')
+        logging.info(f"Saved generated data to {output_path}")
+    except Exception as e:
+        logging.error(f"Failed to save generated data: {e}")
+
+    logging.info(f"\n--- Generation Summary ---")
+    logging.info(f"Successfully generated {total_generated_this_run} records this run.")
+    logging.info(f"Total records in file (including appended): {total_generated_this_run + num_initial_records}")
+    logging.info(f"Total time taken this run: {end_time - start_time:.2f} seconds")
+
+    total_successful_records = sum(model_success_counts.values())
+    if total_successful_records > 0:
+        logging.info("\n--- Model Contribution Percentages ---")
+        for model, count in model_success_counts.items():
+            percentage = (count / total_successful_records) * 100
+            logging.info(f"- {model}: {percentage:.2f}% ({count} records)")
+    else:
+        logging.info("\nNo records successfully generated to calculate percentages.")
+
+
 def main():
+
     signal.alarm(5 * 3600)  # Set a 5-hour alarm
     try:
         parser = argparse.ArgumentParser(description="Generate Imaginator dataset using a cascade of free models.")
@@ -559,7 +958,7 @@ def main():
         for profile in seed_profiles:
             profile_queue.put(profile)
 
-        with ThreadPoolExecutor(max_workers=args.workers) as executor:
+        with ThreadPoolExecutor(max_workers=15) as executor:
             futures_to_profile = {}
             while total_generated_this_run < num_to_generate and (not profile_queue.empty() or futures_to_profile):
                 if denied_request_cooldown_active and time.perf_counter() < cooldown_end_time:
@@ -573,7 +972,6 @@ def main():
                     profile = profile_queue.get()
                     future = executor.submit(generate_scenario_and_solution, profile)
                     futures_to_profile[future] = profile
-                    time.sleep(0.1) # Stagger worker submissions to prevent calls at exactly the same time
 
                 # Process completed futures
                 done_futures = [f for f in futures_to_profile if f.done()]
@@ -584,7 +982,16 @@ def main():
                         generated_records.append(record)
                         total_generated_this_run += 1
                         model_success_counts[model_used] += 1
-                        logging.info(f"Successfully generated record with {model_used}. Total: {len(generated_records) + num_initial_records}")
+                        
+                        # Determine API provider
+                        if ":" in model_used:
+                            provider = "OpenRouter"
+                        elif "/" in model_used:
+                            provider = "HuggingFace"
+                        else:
+                            provider = "SambaNova"
+                        
+                        logging.info(f"Successfully generated record with {model_used} ({provider}). Total: {len(generated_records) + num_initial_records}")
 
                         # Upload to Hugging Face every 10 records
                         if total_generated_this_run % 10 == 0:
@@ -627,7 +1034,16 @@ def main():
                     generated_records.append(record)
                     total_generated_this_run += 1
                     model_success_counts[model_used] += 1
-                    logging.info(f"Successfully generated record with {model_used}. Total: {len(generated_records) + num_initial_records}")
+                    
+                    # Determine API provider
+                    if ":" in model_used:
+                        provider = "OpenRouter"
+                    elif "/" in model_used:
+                        provider = "HuggingFace"
+                    else:
+                        provider = "SambaNova"
+                    
+                    logging.info(f"Successfully generated record with {model_used} ({provider}). Total: {len(generated_records) + num_initial_records}")
                     if total_generated_this_run % 10 == 0:
                         upload_to_huggingface(generated_records[-10:], HF_REPO_ID)
                 else:
@@ -664,7 +1080,11 @@ def main():
             logging.warning(f"--- ACTION REQUIRED ---")
             logging.warning(f"{remaining} records could not be generated with the free tier.")
     except TimeoutException:
-        print("Generation timed out after 25 minutes.")
+        logging.warning("Generation timed out (signal or timeout reached). Performing graceful shutdown and summary.")
+        try:
+            finalize_run(generated_records, num_initial_records, output_path, model_success_counts, start_time)
+        except Exception as e:
+            logging.error(f"Error during graceful finalize: {e}")
     finally:
         signal.alarm(0)  # Disable the alarm
 
