@@ -1,6 +1,3 @@
-{
-  "root": ".",
-  "mcp": { "host": "127.0.0.1", "port": 3333, "transport": "websocket" },
-  "tools": { "mode": "core" },
-  "logging": { "level": "info" }
-}
+version https://git-lfs.github.com/spec/v1
+oid sha256:c234625a60450fc8f78575294e9fba028e60119785324ccb43f450b464eeb84d
+size 157
