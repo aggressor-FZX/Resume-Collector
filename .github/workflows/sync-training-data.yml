@@ -18,70 +18,35 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
-      - name: Install dependencies
-        run: npm ci || true
-
-      - name: Fetch from Resume API
-        env:
-          RESUME_API_KEY: ${{ secrets.RESUME_API_KEY }}
-          RESUME_API_URL: ${{ vars.RESUME_API_URL }}
-        run: |
-          mkdir -p training-data/raw
-          curl -s -H "Authorization: Bearer $RESUME_API_KEY" \
-               -H "Accept: application/json" \
-               "$RESUME_API_URL/batch?limit=100" \
-               -o training-data/raw/resumes-$(date +%Y%m%d).json || exit 0
-
-      - name: Set DATE_FILE
+      - name: Set DATE_FILE for consistency
         run: echo "DATE_FILE=$(date +%Y%m%d)" >> $GITHUB_ENV
 
-      - name: Format for LLM Fine-Tuning (TypeScript)
-        run: |
-          npx ts-node scripts/format-for-llm.ts \
-            --input training-data/raw/resumes-${{ env.DATE_FILE }}.json \
-            --output training-data/formatted/resumes-${{ env.DATE_FILE }}.jsonl \
-            --format openai || echo "No input found or no resumes to format"
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
 
-      - name: Run tests
-        run: |
-          npm test --silent || true
+      - name: Install Python dependencies
+        run: pip install requests python-dotenv
 
-      - name: Validate JSONL
+      - name: Harvest Raw GitHub Profiles
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
         run: |
-          if [ -f "training-data/formatted/resumes-${DATE_FILE}.jsonl" ]; then
-            python3 -c "
-import sys,json
-import os
-p = os.environ.get('DATE_FILE_PATH', 'training-data/formatted/resumes-${DATE_FILE}.jsonl')
-with open(p,'r') as f:
-    for i,line in enumerate(f,1):
-        try:
-            json.loads(line)
-        except Exception as e:
-            print(f'Invalid JSONL at line {i}: {e}')
-            sys.exit(1)
-print('✅ JSONL validation passed')
-"
+          python3 scripts/harvest_github_profiles.py \
+            --query "language:python followers:>100" \
+            --output training-data/raw/github-profiles-raw-${{ env.DATE_FILE }}.json \
+            --limit 100
+
+      - name: Commit and Push Raw Data
+        run: |
+          git config --global user.name 'github-actions[bot]'
+          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+          git add training-data/raw/github-profiles-raw-${{ env.DATE_FILE }}.json
+          # Only commit if there are changes
+          if git diff --staged --quiet; then
+            echo "No new profiles to commit."
           else
-            echo "No formatted file to validate"
+            git commit -m "feat(data): harvest raw github profiles for ${{ env.DATE_FILE }}"
+            git push
           fi
-
-      - name: Update Latest Symlink
-        run: |
-          cd training-data/formatted || exit 0
-          if [ -f resumes-${DATE_FILE}.jsonl ]; then
-            ln -sf resumes-$(date +%Y%m%d).jsonl latest.jsonl || true
-          fi
-
-      - name: Commit & Push
-        run: |
-          git config --local user.email "github-actions[bot]@users.noreply.github.com"
-          git config --local user.name "github-actions[bot]"
-          git add training-data/ || true
-          git commit -m "chore: sync $(date +%Y-%m-%d) training data" || echo "No changes"
-          git push || echo "Push failed"
