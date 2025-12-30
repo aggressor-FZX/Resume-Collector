@@ -1,0 +1,12 @@
+{
+  "input_file": "training-data/formatted/datasetmaster__resumes__pairs.jsonl",
+  "output_file": "training-data/formatted/datasetmaster__resumes__pairs__cleaned.jsonl",
+  "total_input_records": 6,
+  "unique_outputs": 4,
+  "kept": 6,
+  "removed_exact_dup": 0,
+  "removed_by_cap": 0,
+  "redacted_count": 0,
+  "removed_other": 0,
+  "high_freq_outputs": 0
+}

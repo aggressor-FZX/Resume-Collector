@@ -1,0 +1,12 @@
+{
+  "input_file": "training-data/formatted/muhammadadiltalay__fiverr-data-gigs__pairs.jsonl",
+  "output_file": "training-data/formatted/muhammadadiltalay__fiverr-data-gigs__pairs__cleaned.jsonl",
+  "total_input_records": 2430,
+  "unique_outputs": 549,
+  "kept": 1717,
+  "removed_exact_dup": 0,
+  "removed_by_cap": 713,
+  "redacted_count": 2,
+  "removed_other": 0,
+  "high_freq_outputs": 33
+}

@@ -1,0 +1,12 @@
+{
+  "input_file": "training-data/cleaned/gauravduttakiit__resume-dataset.jsonl",
+  "output_file": "training-data/cleaned/gauravduttakiit__resume-dataset__cleaned.jsonl",
+  "total_input_records": 962,
+  "unique_outputs": 166,
+  "kept": 166,
+  "removed_exact_dup": 796,
+  "removed_by_cap": 0,
+  "redacted_count": 56,
+  "removed_other": 0,
+  "high_freq_outputs": 5
+}

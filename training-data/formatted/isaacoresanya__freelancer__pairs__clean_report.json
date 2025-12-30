@@ -1,0 +1,12 @@
+{
+  "input_file": "training-data/formatted/isaacoresanya__freelancer__pairs.jsonl",
+  "output_file": "training-data/formatted/isaacoresanya__freelancer__pairs__cleaned.jsonl",
+  "total_input_records": 8472,
+  "unique_outputs": 4909,
+  "kept": 6275,
+  "removed_exact_dup": 15,
+  "removed_by_cap": 2182,
+  "redacted_count": 7,
+  "removed_other": 0,
+  "high_freq_outputs": 35
+}

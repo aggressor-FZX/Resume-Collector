@@ -1,0 +1,6 @@
+{
+  "root": ".",
+  "mcp": { "host": "127.0.0.1", "port": 3333, "transport": "websocket" },
+  "tools": { "mode": "core" },
+  "logging": { "level": "info" }
+}
