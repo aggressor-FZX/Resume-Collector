@@ -84,9 +84,11 @@ def main():
         }
         prepared_data.append(llm_context)
 
-    with open(output_path, 'w', encoding='utf-8') as f:
+    with open(output_path, 'w', encoding='utf-8', newline='\n') as f:
         for item in prepared_data:
-            f.write(json.dumps(item) + '\\n')
+            # Use print to reliably emit a platform-correct newline and avoid accidental escaping of the literal "\\n"
+            print(json.dumps(item), file=f)
+            f.flush()
 
     print(f"--- Successfully prepared {len(prepared_data)} profiles. ---")
     print(f"Prepared data saved to: {output_path}")

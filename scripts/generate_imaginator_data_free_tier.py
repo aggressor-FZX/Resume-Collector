@@ -25,6 +25,9 @@ import threading
 import signal
 from datasets import Dataset
 from huggingface_hub import HfApi, login
+from collections import defaultdict
+import queue
+import subprocess
 
 # --- Logging Setup ---
 logging.basicConfig(level=logging.INFO,
@@ -173,22 +176,91 @@ def get_raw_resumes(sample_size: int):
 
 
 def load_local_github_seeds(local_path: str, sample_size: int):
-    """Load seed resume texts from a local GitHub-prepared JSONL file."""
+    """Load seed resume texts from a local GitHub-prepared JSONL file.
+
+    Supports two formats:
+    - legacy flat objects with keys like `content`, `text`, or `resume_text`.
+    - OpenAI-style `messages` objects (as produced by `prepare_for_llm.py`).
+
+    Provides detailed diagnostics when no usable entries are found.
+    """
     p = Path(local_path)
     if not p.exists():
         raise FileNotFoundError(f"Local seed file not found: {p}")
+
+    SEED_MIN_LENGTH = int(os.getenv("LOCAL_SEED_MIN_LENGTH", 100))
+
     arr = []
+    decoder = json.JSONDecoder()
+
+    total_lines_read = 0
+    total_json_objects = 0
+    total_with_text_candidate = 0
+
     with p.open('r', encoding='utf-8') as f:
-        for line in f:
-            try:
-                obj = json.loads(line)
-                text = obj.get('content') or obj.get('text') or obj.get('resume_text') or ''
-                if isinstance(text, str) and len(text) > 200:
-                    arr.append(text)
-            except Exception:
+        for raw_line in f:
+            total_lines_read += 1
+            line = raw_line.strip()
+            if not line:
                 continue
+            idx = 0
+            # It is possible a single physical line contains multiple JSON objects; iterate until consumed
+            while idx < len(line):
+                try:
+                    obj, end = decoder.raw_decode(line[idx:])
+                    total_json_objects += 1
+                    idx += end
+
+                    # 1) Prefer explicit top-level text fields
+                    text = None
+                    for key in ('content', 'text', 'resume_text'):
+                        val = obj.get(key)
+                        if isinstance(val, str) and val.strip():
+                            text = val.strip()
+                            break
+
+                    # 2) Support the `messages` format (list of role/content dicts)
+                    if not text and isinstance(obj.get('messages'), list):
+                        msgs = obj['messages']
+                        # Prefer user messages (these contain the candidate bio + projects)
+                        user_msgs = [m for m in msgs if m.get('role') == 'user' and isinstance(m.get('content'), str)]
+                        if user_msgs:
+                            text = "\n\n".join([m['content'].strip() for m in user_msgs])
+                        else:
+                            # Fallback: concatenate any available message contents
+                            contents = [m.get('content') for m in msgs if isinstance(m.get('content'), str)]
+                            if contents:
+                                text = "\n\n".join([c.strip() for c in contents])
+
+                    # 3) Fallback: if the whole object is a string
+                    if not text and isinstance(obj, str):
+                        text = obj
+
+                    if isinstance(text, str):
+                        total_with_text_candidate += 1
+                        # Accept prepared prompts above the configured threshold
+                        if len(text) > SEED_MIN_LENGTH:
+                            arr.append(text)
+
+                    # Skip any separating whitespace or commas, and also handle literal escaped newlines (\n) inserted accidentally
+                    while idx < len(line):
+                        if line[idx] in ',\n\r\t ':
+                            idx += 1
+                            continue
+                        if line.startswith('\\n', idx):
+                            idx += 2
+                            continue
+                        break
+                except json.JSONDecodeError:
+                    # If we can't decode, break out to avoid infinite loop and move to next physical line
+                    break
+
+    logging.info(f"Local seed diagnostics: lines={total_lines_read}, json_objects={total_json_objects}, with_text_candidate={total_with_text_candidate}, accepted={len(arr)}, min_len={SEED_MIN_LENGTH}")
+
     if not arr:
-        raise FileNotFoundError(f"No usable entries found in local seed file: {p}")
+        raise FileNotFoundError(
+            f"No usable entries found in local seed file: {p} (lines={total_lines_read}, json_objects={total_json_objects}, with_text_candidate={total_with_text_candidate})"
+        )
     return random.sample(arr, min(sample_size, len(arr)))
 
 def make_api_call(prompt_messages, model):
@@ -444,8 +516,22 @@ def main():
                 seed_profiles = load_local_github_seeds(args.seed_local_file, args.num_examples)
                 logging.info(f"Loaded {len(seed_profiles)} local seeds from {args.seed_local_file}.")
             except Exception as e:
-                logging.error(f"Error loading local seeds: {e}. Falling back to raw resumes.")
-                seed_profiles = get_raw_resumes(args.num_examples)
+                logging.error(f"Error loading local seeds: {e}.")
+
+                # Attempt to regenerate the prepared seeds automatically if the raw harvest is available
+                raw_input_path = Path('training-data/raw/github_profiles_raw.json')
+                if raw_input_path.exists():
+                    logging.info("Attempting to regenerate prepared seeds from raw harvest file and retrying load...")
+                    try:
+                        subprocess.run(['python', 'scripts/prepare_for_llm.py', '-i', str(raw_input_path), '-o', args.seed_local_file], check=True)
+                        seed_profiles = load_local_github_seeds(args.seed_local_file, args.num_examples)
+                        logging.info(f"Loaded {len(seed_profiles)} local seeds from {args.seed_local_file} after regenerating.")
+                    except Exception as e2:
+                        logging.error(f"Regeneration or reload failed: {e2}. Falling back to raw resumes.")
+                        seed_profiles = get_raw_resumes(args.num_examples)
+                else:
+                    logging.info("No raw GitHub harvest file found. Falling back to raw resumes.")
+                    seed_profiles = get_raw_resumes(args.num_examples)
 
         num_to_generate = min(args.num_examples, len(seed_profiles))
         logging.info(f"Using {num_to_generate} seed profiles. Will generate {num_to_generate} examples with {args.workers} workers.")
@@ -577,7 +663,6 @@ def main():
             remaining = num_to_generate - total_generated_this_run
             logging.warning(f"--- ACTION REQUIRED ---")
             logging.warning(f"{remaining} records could not be generated with the free tier.")
-            logging.warning("You can now run the paid generation script to complete the dataset.")
     except TimeoutException:
         print("Generation timed out after 25 minutes.")
     finally:
