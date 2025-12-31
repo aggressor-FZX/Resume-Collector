@@ -173,3 +173,75 @@ This script supports chunked uploads for large datasets and verifies the Hugging
 2025-12-31T02:54:57Z | imaginator_generation | completed | Generated 180 imaginator records in 300Run_imaginator_fuel.jsonl, uploaded to HF repo jeff-calderon/imaginator-dataset. Model contributions: nex-agi/deepseek-v3.1-nex-n1:free 22.22% (40), meta-llama/llama-3.3-70b-instruct 8.89% (16), deepseek/deepseek-v3.2-speciale 8.33% (15), qwen/qwen-2.5-72b-instruct 8.33% (15), nousresearch/hermes-4-70b 9.44% (17), deepseek/deepseek-v3.2 7.78% (14), thedrummer/rocinante-12b 7.78% (14), deepseek/deepseek-r1-distill-qwen-32b 6.11% (11), thedrummer/skyfall-36b-v2 6.67% (12), DeepSeek-V3.1 3.89% (7), Meta-Llama-3.3-70B-Instruct 4.44% (8), DeepSeek-R1-0528 3.33% (6), gpt-oss-120b 2.78% (5)
 2025-12-30T21:32:00Z | SambaNova Qwen3-235B integrated into model cascade, HF free models added, successful 3-minute test with 4 records generated, data uploaded to jeff-calderon/Tech_Resumes
 2025-12-28T22:23:56Z | upload_manifest created with 9 datasets, total_records=36344
+
+---
+
+## Imaginator Training Plan — Hybrid Instruction Tuning 🧠💡
+
+**Overview:** This plan describes a production-ready approach to fine-tuning a large base model so it can do more than "text polishing" — it will perform strategic reasoning, taking inputs from your pipeline (Hermes, FastSVM, Job Ads) and produce resumes that *bridge skill gaps*.
+
+### 1) The Core Philosophy — **Hybrid Instruction Tuning**
+
+- We fine-tune a large "Teacher" model (e.g., `meta-llama/llama-3.3-70b-instruct` or a Magnum 72B variant) using a hybrid dataset composed of:
+  - **Dataset A — The Stylist (80%)**: Real Upwork/collected rows (~26k). Teaches tone, active phrasing, and metric-driven bullets.
+  - **Dataset B — The Strategist (20%)**: Synthetic "Imaginator Scenarios" (1k–2k). Trains strategic reasoning and gap-bridging logic.
+
+### 2) Step-by-Step Training Workflow
+
+**Phase 1 — Synthesizing the "Strategist" Data**
+- Problem: We lack examples of `Hermes Inputs -> Perfect Resumes`.
+- Solution: Use a stronger Teacher model (e.g., Hermes 3 405B or GPT-4o) to generate ideal responses from simulated scenarios.
+- Generator script behavior:
+  - Input: A raw resume from your dataset.
+  - Simulation: Randomly assign a Target Job and simulate Hermes outputs (e.g., "Flagged Gap: Kubernetes").
+  - Teacher prompt (example):
+
+```text
+"You are an expert Resume Strategist. Given a candidate profile, a Target Job, and identified Gaps, craft a resume segment that uses inferred bridges (e.g., Docker -> Kubernetes) to minimize the gap. Output must be interview-ready and metric-driven."
+```
+
+- Save the paired (scenario input, Teacher Output) as a JSONL training record.
+
+**Phase 2 — Constructing the Training Dataset**
+- Format records into the conversational JSONL used by Unsloth/Hugging Face, e.g.:
+
+```json
+{
+  "messages": [
+    {"role": "system", "content": "You are the Imaginator. Synthesize the input into a tailored resume. Use 'Inferred Skills' to bridge gaps."},
+    {"role": "user", "content": "CONTEXT:\n- Candidate: Senior Python Dev\n- Target Job: Cloud Architect\n\nLOGIC LAYER:\n- Critical Gap: AWS Security\n- Inferred Bridge: 'Identity Management' (from Django Auth)\n- Market Trend: Serverless\n\nTASK: Rewrite Project Experience for 'E-Commerce Backend' role."},
+    {"role": "assistant", "content": "Project: E-Commerce Backend Refactor\n- Architected a serverless backend using Python and AWS Lambda, implementing Identity Management (OAuth2) to secure user data..."}
+  ]
+}
+```
+
+**Phase 3 — Fine-Tuning Environment**
+- Use **Unsloth** on A100 GPUs to run **QLoRA** (quantized LoRA adapters).
+- Base model: `meta-llama/llama-3.3-70b-instruct` quantized (4-bit preferred).
+- Why QLoRA: Freeze base weights and train small adapter layers (~1–2% params) so the model learns domain-specific reasoning without catastrophic forgetting.
+- Target modules to adapt: all linear modules (`q_proj`, `k_proj`, `v_proj`, `o_proj`, `gate_proj`, `up_proj`, `down_proj`). This focuses training on reasoning pathways, not surface-level vocabulary.
+
+**Phase 4 — The Training Run**
+- Load hybrid dataset (80% Stylist + 20% Strategist).
+- Train for ~1–2 epochs with a low LR (e.g., 2e-4) and early stopping.
+- Save only LoRA adapters (compact artifacts, ~200MB) for production deployment.
+- Validation: run held-out job-ad alignment tests and manual spot-checks to detect catastrophic degradation.
+
+### 3) Production Architecture & Inference Flow
+
+- Frontend: user uploads resume + target job URL.
+- Preprocessing: Document Reader extracts text; Hermes & FastSVM extract skills & signals.
+- Logic Module: computes adjacency and gap scores (e.g., Python=90%, Azure=0% — Azure adjacent to AWS).
+- Prompt Engineering (the Bridge): Structured prompt communicates Profile, Gap, and Strategy to `Imaginator`.
+- Inference: a quantized `Llama-3.3-70B` + LoRA adapter produces a role-targeted, metric-driven resume output.
+
+**Summary Checklist ✅**
+- **Model**: Llama 3.3 70B Instruct (quantized)
+- **Technique**: QLoRA via Unsloth
+- **Data Strategy**: 80% Stylist (real Upwork), 20% Strategist (synthetic Imaginator scenarios)
+- **Hardware**: A100 (80GB) or A100 (40GB) ×1–2
+- **Outcome**: Model that bridges skill gaps and writes interview-focused, metric-driven resume content.
+
+---
+
+If you'd like, I can also add supporting scripts and example training notebooks to `scripts/` and `notebooks/` to automate Phase 1+2 (scenario generation, teacher calls, JSONL formatting). Let me know which you'd prefer next.
