@@ -1306,7 +1306,12 @@ def main():
                         
                         # If a profile failed, put it back in the queue to be retried by another model/worker
                         # but only if it hasn't exhausted all models already
-                        if "Failed to generate scenario after" not in error and "Failed to generate solution after" not in error:
+                        try:
+                            err_text = str(error) if error is not None else ""
+                            if "Failed to generate scenario after" not in err_text and "Failed to generate solution after" not in err_text:
+                                profile_queue.put(profile) # Re-queue the original profile
+                        except Exception:
+                            # Defensive: if error is malformed, requeue the profile so it can be retried
                             profile_queue.put(profile) # Re-queue the original profile
 
                 # Periodic printouts
