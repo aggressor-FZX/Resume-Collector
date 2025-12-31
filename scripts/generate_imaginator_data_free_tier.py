@@ -138,6 +138,13 @@ samba_semaphore = threading.Semaphore(3)
 paid_openrouter_semaphore = threading.Semaphore(3)
 # If we detect an authentication/entitlement failure for OpenRouter paid models, set this flag to avoid repeated 401s
 openrouter_auth_failed = False
+# Support repeating the same model after success
+last_success_model = None
+repeat_on_success = False
+# CLI-populated runtime blacklist (models to avoid this run)
+runtime_blacklist = set()
+# Global append mode flag (set from args)
+append_mode = False
 
 # Toggle used to alternate preference between Samba and paid providers (thread-safe by using model_lock)
 prefer_paid_toggle = False
@@ -238,12 +245,21 @@ def get_next_model():
     If all models are on cooldown, wait until the earliest cooldown expires.
     """
     with model_lock:
+        # If repeat-on-success is enabled and we previously had a working model, prefer it first
+        global last_success_model, repeat_on_success, prefer_paid_toggle
+        if repeat_on_success and last_success_model:
+            m = last_success_model
+            if m not in banned_models:
+                cd = model_cooldowns.get(m)
+                if not cd or time.time() >= cd:
+                    logging.debug(f"Repeating last successful model: {m}")
+                    return m
+
         start_model = next(model_cycler)
         current_model = start_model
 
         # Alternate preference between Samba and paid models to distribute usage and ensure paid models rotate even when Samba is available.
         # Use the `prefer_paid_toggle` to alternate each time this function is called (thread-safe via model_lock).
-        global prefer_paid_toggle
         prefer_paid = prefer_paid_toggle
         prefer_paid_toggle = not prefer_paid_toggle
 
@@ -1061,7 +1077,13 @@ def finalize_run(generated_records, num_initial_records, output_path, model_succ
     end_time = time.perf_counter()
     total_generated_this_run = len(generated_records)
 
-    mode = 'a' if output_path.exists() and output_path.stat().st_size > 0 else 'w'
+    # Respect explicit append_mode to avoid accidental overwrites when requested
+    global append_mode
+    if append_mode:
+        mode = 'a'
+    else:
+        mode = 'a' if output_path.exists() and output_path.stat().st_size > 0 else 'w'
+
     try:
         with output_path.open(mode, encoding='utf-8') as f:
             for record in generated_records:
@@ -1098,6 +1120,8 @@ def main():
         parser.add_argument("--seed_local_file", type=str, default='training-data/formatted/github_profiles_prepared.jsonl', help="Local seed file path used when seed_source=local")
         parser.add_argument("--workers", type=int, default=5, help="Number of concurrent workers.")
         parser.add_argument("--append", action="store_true", help="Append to the output file if it exists.")
+        parser.add_argument("--blacklist", type=str, default="", help="Comma-separated model IDs to blacklist for this run.")
+        parser.add_argument("--repeat_on_success", action="store_true", help="If set, repeat the same model after a successful generation until it fails.")
         # New flags to support paid-only runs and custom timeout
         parser.add_argument("--only_paid", action="store_true", help="Use only the configured paid OpenRouter models for generation (paid models must be validated).")
         parser.add_argument("--timeout", type=int, default=None, help="Maximum runtime in seconds (overrides default alarm).")
@@ -1108,6 +1132,22 @@ def main():
             signal.alarm(args.timeout)
             logging.info(f"Overriding default alarm: setting timeout to {args.timeout} seconds.")
         
+        # Apply runtime blacklist if provided
+        if args.blacklist:
+            bl = [m.strip() for m in args.blacklist.split(',') if m.strip()]
+            for m in bl:
+                banned_models.add(m)
+            if bl:
+                logging.info(f"Runtime blacklist applied: {bl}")
+
+        # Set repeat-on-success behavior if requested
+        global repeat_on_success, append_mode
+        if args.repeat_on_success:
+            repeat_on_success = True
+            logging.info("Repeat-on-success mode enabled: successful models will be retried until they fail.")
+        if args.append:
+            append_mode = True
+            logging.info("Append mode: output will be appended to rather than overwritten.")
         # If requested, limit the model cascade to only paid OpenRouter models (validated at startup)
         if args.only_paid:
             if not PAID_OPENROUTER_MODELS:
@@ -1219,21 +1259,50 @@ def main():
                         
                         logging.info(f"Successfully generated record with {model_used} ({provider}). Total: {len(generated_records) + num_initial_records}")
 
-                        # Upload to Hugging Face every 10 records (if repo configured)
-                        if total_generated_this_run % 10 == 0:
-                            if HF_REPO_ID:
-                                upload_to_huggingface(generated_records[-10:], HF_REPO_ID)
-                            else:
-                                logging.debug("HF_REPO_ID not set; skipping HF upload.")
+                    # Update repeat-on-success preference to keep using this model if requested
+                    try:
+                        if args.repeat_on_success:
+                            with model_lock:
+                                last_success_model = model_used
+                    except Exception:
+                        pass
+
+                    # Log live model contribution percentages
+                    total_successful = sum(model_success_counts.values())
+                    if total_successful > 0:
+                        # Build top contributors line
+                        top = sorted(model_success_counts.items(), key=lambda x: x[1], reverse=True)[:5]
+                        top_str = ", ".join([f"{m}={c}({c/total_successful*100:.1f}%)" for m,c in top])
+                        logging.info(f"Contribs: {top_str} | Total successful: {total_successful}")
+
+                    # Upload to Hugging Face every 10 records (if repo configured)
+                    if total_generated_this_run % 10 == 0:
+                        if HF_REPO_ID:
+                            upload_to_huggingface(generated_records[-10:], HF_REPO_ID)
+                        else:
+                            logging.debug("HF_REPO_ID not set; skipping HF upload.")
                     else:
                         model_fail_counts[model_used] += 1
                         logging.error(f"Failed to generate record. Error: {error}. Model: {model_used}")
-                        
+
+                        # If this model was the last successful model and it failed now, clear the repeat preference
+                        try:
+                            with model_lock:
+                                if last_success_model == model_used:
+                                    last_success_model = None
+                        except Exception:
+                            pass
+
                         # Check for repeated denied requests to trigger cooldown
-                        if "429 Client Error" in error or "Too Many Requests" in error:
-                            logging.warning("Repeated denied requests detected. Activating 5-minute cooldown.")
-                            denied_request_cooldown_active = True
-                            cooldown_end_time = time.perf_counter() + (5 * 60) # 5 minutes
+                        try:
+                            err_str = str(error) if error is not None else ""
+                            if "429 Client Error" in err_str or "Too Many Requests" in err_str:
+                                logging.warning("Repeated denied requests detected. Activating 5-minute cooldown.")
+                                denied_request_cooldown_active = True
+                                cooldown_end_time = time.perf_counter() + (5 * 60) # 5 minutes
+                        except Exception:
+                            # Defensive fallback: ignore malformed error values
+                            pass
                         
                         # If a profile failed, put it back in the queue to be retried by another model/worker
                         # but only if it hasn't exhausted all models already
