@@ -121,6 +121,12 @@ banned_models = set()
 # Make OpenRouter free-tier concurrency configurable via env var OPENROUTER_CONCURRENCY (default 9).
 OPENROUTER_CONCURRENCY = int(os.getenv("OPENROUTER_CONCURRENCY", "9"))
 api_call_semaphore = threading.Semaphore(OPENROUTER_CONCURRENCY) # Allows concurrent OpenRouter free-tier calls
+
+# Spacing controls for paid OpenRouter calls to tune RPS without changing worker counts.
+# - OPENROUTER_PAID_SPACING: seconds to sleep *before* each paid call (default 0.5)
+# - OPENROUTER_AFTER_SUCCESS_WAIT: seconds to sleep *after* a successful scenario generation (default 1.1)
+OPENROUTER_PAID_SPACING = float(os.getenv("OPENROUTER_PAID_SPACING", "0.5"))
+OPENROUTER_AFTER_SUCCESS_WAIT = float(os.getenv("OPENROUTER_AFTER_SUCCESS_WAIT", "1.1"))
 # Limit concurrent SambaNova requests to 3
 samba_semaphore = threading.Semaphore(3)
 # Limit concurrent paid OpenRouter requests to 3
@@ -578,7 +584,8 @@ def make_paid_openrouter_api_call(prompt_messages, model):
         if not acquired:
             return None, "Paid OpenRouter concurrency limit reached; try next model."
 
-        time.sleep(0.5) # Add a small delay to further space out requests
+        # Respect configurable spacing to control paid OpenRouter request rate.
+        time.sleep(OPENROUTER_PAID_SPACING) # Add a small delay to further space out requests
 
         response = requests.post(
             url=f"{OPENROUTER_API_BASE}/chat/completions",
@@ -864,7 +871,8 @@ def generate_scenario_and_solution(resume_text):
         scenario_response_str, error = make_api_call(prompt_step1, current_model)
         if not error:
             scenario_succeeded = True
-            time.sleep(1.1) # Wait 1.1 second after a successful call
+            # Wait a configurable amount after a successful call to tune throughput and avoid transient rate limitations
+            time.sleep(OPENROUTER_AFTER_SUCCESS_WAIT) # Wait after a successful call
             break
         logging.warning(f"  Worker failed with {current_model}. Retrying with next model...")
         current_model = get_next_model()
@@ -943,7 +951,8 @@ Task: Rewrite the Experience section to target this new role, using the inferred
         solution_text, error = make_api_call(prompt_step2, current_model)
         if not error:
             solution_succeeded = True
-            time.sleep(1.1) # Wait 1.1 second after a successful call
+            # Wait a configurable amount after a successful call to tune throughput and avoid transient rate limitations
+            time.sleep(OPENROUTER_AFTER_SUCCESS_WAIT) # Wait after a successful call
             break
         logging.warning(f"  Worker failed (solution) with {current_model}. Retrying with next model...")
         current_model = get_next_model()
@@ -1047,7 +1056,7 @@ def finalize_run(generated_records, num_initial_records, output_path, model_succ
 
     logging.info(f"\n--- Generation Summary ---")
     logging.info(f"Successfully generated {total_generated_this_run} records this run.")
-    logging.info(f"Total records in file (including appended): {total_generated_this_run + num_initial_records}")
+    logging.info(f"Total records in file: {total_generated_this_run + num_initial_records}")
     logging.info(f"Total time taken this run: {end_time - start_time:.2f} seconds")
 
     total_successful_records = sum(model_success_counts.values())
@@ -1072,7 +1081,6 @@ def main():
         parser.add_argument("--seed_source", type=str, choices=['github','local'], default='local', help="Seed source: 'github' to fetch profiles from GitHub, 'local' to use pre-fetched local file.")
         parser.add_argument("--seed_local_file", type=str, default='training-data/formatted/github_profiles_prepared.jsonl', help="Local seed file path used when seed_source=local")
         parser.add_argument("--workers", type=int, default=1, help="Number of concurrent workers.")
-        parser.add_argument("--append", action="store_true", help="Append to the output file if it exists.")
         # New flags to support paid-only runs and custom timeout
         parser.add_argument("--only_paid", action="store_true", help="Use only the configured paid OpenRouter models for generation (paid models must be validated).")
         parser.add_argument("--timeout", type=int, default=None, help="Maximum runtime in seconds (overrides default alarm).")
@@ -1135,7 +1143,7 @@ def main():
         
         num_initial_records = 0
         output_path = OUTPUT_DIR / args.output_file
-        if args.append and output_path.exists():
+        if output_path.exists():
             with output_path.open('r', encoding='utf-8') as f:
                 num_initial_records = sum(1 for _ in f)
 
@@ -1258,11 +1266,11 @@ def main():
         end_time = time.perf_counter()
         logging.info(f"\n--- Generation Complete ---")
         logging.info(f"Successfully generated {len(generated_records)} out of {num_to_generate} targeted examples this run.")
-        logging.info(f"Total records in file (including appended): {len(generated_records) + num_initial_records}")
+        logging.info(f"Total records in file: {len(generated_records) + num_initial_records}")
         logging.info(f"Total time taken this run: {end_time - start_time:.2f} seconds")
         
         output_path = OUTPUT_DIR / args.output_file
-        mode = 'a' if args.append else 'w'
+        mode = 'a'
         with output_path.open(mode, encoding='utf-8') as f:
             for record in generated_records:
                 f.write(json.dumps(record) + '\n')
