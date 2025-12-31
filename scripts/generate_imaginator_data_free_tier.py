@@ -879,10 +879,18 @@ def generate_scenario_and_solution(resume_text):
     """
     current_model = get_next_model()
     
+    # Decide if this is a negative example (bad fit)
+    is_negative = random.random() < 0.1  # 10% chance for negative examples
+    
     # Step 1: Generate the scenario
+    if is_negative:
+        user_content = f"Here is the candidate's resume text:\n---\n{resume_text}\n---\n\nBased on this, generate a JSON object with keys: `job_ad_text`, `extracted_skills_json`, and `domain_insights_json`. The job ad should be a significant 'reach' for the candidate to create a large skill gap. The insights must identify this gap and suggest an 'inferred_skill' that is NOT transferable from the candidate's background. Provide a brief explanation of why this skill is not transferable."
+    else:
+        user_content = f"Here is the candidate's resume text:\n---\n{resume_text}\n---\n\nBased on this, generate a JSON object with keys: `job_ad_text`, `extracted_skills_json`, and `domain_insights_json`. The job ad should be a slight 'reach' for the candidate to create a skill gap. The insights must identify this gap and suggest an 'inferred_skill' based on transferable skills from the candidate's background. Provide a brief explanation of why this skill is transferable."
+    
     prompt_step1 = [
         {"role": "system", "content": "You are an expert career advisor. Your task is to create a realistic job application scenario based on a candidate's resume. IMPORTANT: Your final output MUST be a single, valid JSON object and nothing else. Do not include any text before or after the JSON object."},
-        {"role": "user", "content": f"Here is the candidate's resume text:\n---\n{resume_text}\n---\n\nBased on this, generate a JSON object with keys: `job_ad_text`, `extracted_skills_json`, and `domain_insights_json`. The job ad should be a slight 'reach' for the candidate to create a skill gap. The insights must identify this gap and suggest an 'inferred_skill'."}
+        {"role": "user", "content": user_content}
     ]
     
     # --- Retry logic for robust scenario generation ---
@@ -955,6 +963,10 @@ def generate_scenario_and_solution(resume_text):
     # --- End of Robust Schema Validation ---
 
     # First, we need a concise summary of the generated scenario for the user prompt
+    task_instruction = "Rewrite the Experience section to target this new role, using the inferred skill to bridge the gap."
+    if is_negative:
+        task_instruction = "Attempt to rewrite the Experience section to target this new role, but note that the inferred skill does not adequately bridge the gap and include a disclaimer that the candidate may not be a good fit."
+    
     user_prompt_context = f"""CANDIDATE DATA:
 - Role: {candidate_role}
 - Skills: {candidate_skills}
@@ -966,10 +978,14 @@ INSIGHTS:
 - Gap: {gap}
 - Inferred Skill: {inferred_skill}
 
-Task: Rewrite the Experience section to target this new role, using the inferred skill to bridge the gap."""
+Task: {task_instruction}"""
 
+    system_content = "You are the Imaginator. First, provide a <reasoning> block explaining how you will bridge the gaps using inferred skills and why the synthesis is logical. Then, synthesize the input data into a tailored resume section."
+    if is_negative:
+        system_content = "You are the Imaginator. First, provide a <reasoning> block explaining the attempt to bridge the gaps, noting if the inferred skills are insufficient. Then, synthesize the input data into a tailored resume section, including a disclaimer if it's a bad fit."
+    
     prompt_step2 = [
-        {"role": "system", "content": "You are the Imaginator. Synthesize the input data into a tailored resume section. Use the 'Inferred Skills' to bridge any gaps between the candidate and the Job Ad."},
+        {"role": "system", "content": system_content},
         {"role": "user", "content": user_prompt_context}
     ]
 
@@ -999,7 +1015,8 @@ Task: Rewrite the Experience section to target this new role, using the inferred
         "extracted_skills_json": scenario.get("extracted_skills_json"),
         "domain_insights_json": scenario.get("domain_insights_json"),
         "messages": prompt_step2 + [{"role": "assistant", "content": solution_text}],
-        "model_used": current_model # Store the model that successfully generated the record
+        "model_used": current_model, # Store the model that successfully generated the record
+        "is_negative": is_negative
     }
 
     return final_record, None, current_model
