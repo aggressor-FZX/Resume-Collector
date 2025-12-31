@@ -84,20 +84,20 @@ MODEL_CASCADE = [
     "Qwen3-32B",
     "Llama-3.3-Swallow-70B-Instruct-v0.4",
     # Hugging Face Inference API models (open-weight, >10B), prioritized for free tier
-    "deepseek-ai/DeepSeek-R1-Distill-Qwen-32B", # Best balance of logic/speed on free tier
-    "meta-llama/Llama-3.3-70B-Instruct",
-    "Qwen/Qwen2.5-72B-Instruct",
+    "deepseek/deepseek-r1-distill-qwen-32b", # Best balance of logic/speed on free tier
+    "meta-llama/llama-3.3-70b-instruct",
+    "qwen/qwen-2.5-72b-instruct",
     # Legacy OpenRouter free models (for fallback)
 
     "nex-agi/deepseek-v3.1-nex-n1:free",
 
     "google/gemma-3-27b-it:free",
     # Paid OpenRouter models (for dedicated pool of 3 workers)
-    "NousResearch/Hermes-4.3-36B",
-    "TheDrummer/Rocinante-12B-v1.1",
-    "deepseek-ai/DeepSeek-V3.2-Exp",
-    "TheDrummer/Skyfall-36B-v2",
-    "deepseek-ai/DeepSeek-V3.2-Speciale",
+    "nousresearch/hermes-4-70b",
+    "thedrummer/rocinante-12b",
+    "deepseek/deepseek-v3.2",
+    "thedrummer/skyfall-36b-v2",
+    "deepseek/deepseek-v3.2-speciale",
 ]
 
 HF_MODELS = {
@@ -120,6 +120,8 @@ api_call_semaphore = threading.Semaphore(OPENROUTER_CONCURRENCY) # Allows concur
 samba_semaphore = threading.Semaphore(3)
 # Limit concurrent paid OpenRouter requests to 3
 paid_openrouter_semaphore = threading.Semaphore(3)
+# If we detect an authentication/entitlement failure for OpenRouter paid models, set this flag to avoid repeated 401s
+openrouter_auth_failed = False
 
 # Toggle used to alternate preference between Samba and paid providers (thread-safe by using model_lock)
 prefer_paid_toggle = False
@@ -141,6 +143,78 @@ def is_paid_openrouter_model(model: str) -> bool:
 # --- Paid OpenRouter rotation ---
 PAID_OPENROUTER_MODELS = [m for m in MODEL_CASCADE if is_paid_openrouter_model(m)]
 paid_model_cycler = cycle(PAID_OPENROUTER_MODELS) if PAID_OPENROUTER_MODELS else None
+
+# Validate paid OpenRouter model IDs at startup and suggest canonical replacements if necessary.
+# This performs a lightweight /models lookup and maps configured IDs to available canonical slugs.
+# If models are missing, a log entry is emitted and the missing models are removed from the rotation.
+# Callers may still see runtime 401/404 errors for entitlement or privacy settings; those are handled
+# in make_paid_openrouter_api_call with clearer diagnostics.
+
+def validate_paid_openrouter_models():
+    global PAID_OPENROUTER_MODELS, paid_model_cycler
+    if not OPENROUTER_API_KEY:
+        logging.debug("OPENROUTER_API_KEY not set; skipping paid OpenRouter model validation.")
+        return
+    try:
+        resp = requests.get(f"{OPENROUTER_API_BASE}/models", headers={"Authorization": f"Bearer {OPENROUTER_API_KEY}"}, timeout=30)
+        if resp.status_code != 200:
+            logging.warning(f"Failed to fetch OpenRouter /models for validation: {resp.status_code} {resp.text[:200]}")
+            return
+        data = resp.json()
+        models_list = None
+        if isinstance(data, dict) and 'data' in data:
+            if isinstance(data['data'], list):
+                models_list = data['data']
+            elif isinstance(data['data'], dict) and 'models' in data['data']:
+                models_list = data['data']['models']
+        elif isinstance(data, dict) and 'models' in data:
+            models_list = data['models']
+        elif isinstance(data, list):
+            models_list = data
+        if not models_list:
+            logging.warning("Unexpected /models structure during validation; skipping paid model mapping.")
+            return
+        available_ids = [m.get('id') or m.get('canonical_slug') or m.get('name') for m in models_list]
+        available_ids = [a for a in available_ids if a]
+        # Map configured PAID_OPENROUTER_MODELS to available canonical slugs, using exact, substring, or fuzzy matches.
+        import difflib
+        replacements = {}
+        new_list = []
+        for m in PAID_OPENROUTER_MODELS:
+            target = m
+            # exact
+            match = next((c for c in available_ids if c.lower() == target.lower()), None)
+            if match:
+                new_list.append(match)
+                continue
+            # substring
+            match = next((c for c in available_ids if target.lower() in c.lower() or c.lower() in target.lower()), None)
+            if match:
+                replacements[m] = match
+                new_list.append(match)
+                continue
+            # fuzzy
+            close = difflib.get_close_matches(m, available_ids, n=1, cutoff=0.6)
+            if close:
+                replacements[m] = close[0]
+                new_list.append(close[0])
+                continue
+            # missing
+            logging.warning(f"Configured paid OpenRouter model is missing from /models listing: {m}")
+        if replacements:
+            logging.info("Paid OpenRouter model mapping suggestions:")
+            for k, v in replacements.items():
+                logging.info(f"  {k} -> {v}")
+        # Replace only if any canonical matches were found; otherwise keep original list except missing ones removed
+        if new_list:
+            PAID_OPENROUTER_MODELS = new_list
+            paid_model_cycler = cycle(PAID_OPENROUTER_MODELS) if PAID_OPENROUTER_MODELS else None
+            logging.info(f"Using {len(PAID_OPENROUTER_MODELS)} validated paid OpenRouter models for rotation.")
+    except Exception as e:
+        logging.warning(f"Exception while validating paid OpenRouter models: {e}")
+
+# Run validation at startup so subsequent runtime calls are more likely to succeed.
+validate_paid_openrouter_models()
 
 
 def get_next_model():
@@ -174,6 +248,11 @@ def get_next_model():
 
         def try_prefer_paid_first():
             try:
+                # If we've detected an account-level OpenRouter auth failure, skip paid models entirely
+                if openrouter_auth_failed:
+                    logging.debug("OpenRouter paid auth previously failed; skipping paid models.")
+                    return None
+
                 if paid_openrouter_semaphore.acquire(blocking=False):
                     paid_openrouter_semaphore.release()
                     # Use a dedicated cycler for paid models to rotate through them fairly and avoid constant retries
@@ -517,9 +596,34 @@ def make_paid_openrouter_api_call(prompt_messages, model):
         logging.error(f"    - {error_message}")
         if e.response and e.response.status_code == 402:
             logging.warning("OpenRouter paid credits may be exhausted (402 Payment Required).")
+        elif e.response and e.response.status_code == 401:
+            # Account-level authentication/entitlement failure for OpenRouter paid models.
+            # Disable paid models for the remainder of this run and set a flag to avoid repeated 401s.
+            global openrouter_auth_failed
+            openrouter_auth_failed = True
+            for pm in PAID_OPENROUTER_MODELS:
+                banned_models.add(pm)
+            error_message += ". Received 401 Unauthorized for paid OpenRouter models — disabling paid OpenRouter models for this run. Please verify OPENROUTER_API_KEY and account entitlements."
         elif e.response and e.response.status_code in [400, 404]:
+            # Distinguish between generic 400/404 and OpenRouter-specific "No endpoints found matching your data policy" case
+            try:
+                body = e.response.json()
+                msg = None
+                if isinstance(body, dict):
+                    msg = body.get('error', {}).get('message') or body.get('message') or str(body)
+                else:
+                    msg = str(body)
+            except Exception:
+                msg = e.response.text[:500]
+
+            if isinstance(msg, str) and 'No endpoints found matching your data policy' in msg:
+                logging.error(
+                    f"Paid OpenRouter model {model} exists but is blocked by your account data/privacy settings: {msg}."
+                )
+                error_message += ". Model requires OpenRouter account data/privacy configuration (see https://openrouter.ai/settings/privacy); banning for this run."
+            else:
+                error_message += ". Model returned 400/404; banning for the remainder of this run."
             banned_models.add(model)
-            error_message += ". Model returned 400/404; banning for the remainder of this run."
         elif e.response and e.response.status_code in [429, 503]:
             cooldown_seconds = 600  # 10 minutes
             model_cooldowns[model] = time.time() + cooldown_seconds
@@ -887,16 +991,37 @@ def finalize_run(generated_records, num_initial_records, output_path, model_succ
 
 def main():
 
-    signal.alarm(5 * 3600)  # Set a 5-hour alarm
+    # Default alarm is 5 hours; allow user to override via --timeout (seconds) for shorter runs
+    # (e.g., --timeout 7200 for 2 hours)
+    signal.alarm(5 * 3600)  # Set a 5-hour alarm by default
     try:
-        parser = argparse.ArgumentParser(description="Generate Imaginator dataset using a cascade of free models.")
+        parser = argparse.ArgumentParser(description="Generate Imaginator dataset using a cascade of models.")
         parser.add_argument("--num_examples", type=int, default=50, help="Number of examples to generate.")
         parser.add_argument("--output_file", type=str, default="imaginator_complex_free_TEST_50.jsonl", help="Output JSONL file name.")
         parser.add_argument("--seed_source", type=str, choices=['github','local'], default='local', help="Seed source: 'github' to fetch profiles from GitHub, 'local' to use pre-fetched local file.")
         parser.add_argument("--seed_local_file", type=str, default='training-data/formatted/github_profiles_prepared.jsonl', help="Local seed file path used when seed_source=local")
         parser.add_argument("--workers", type=int, default=1, help="Number of concurrent workers.")
         parser.add_argument("--append", action="store_true", help="Append to the output file if it exists.")
+        # New flags to support paid-only runs and custom timeout
+        parser.add_argument("--only_paid", action="store_true", help="Use only the configured paid OpenRouter models for generation (paid models must be validated).")
+        parser.add_argument("--timeout", type=int, default=None, help="Maximum runtime in seconds (overrides default alarm).")
         args = parser.parse_args()
+
+        # Apply --timeout override if provided
+        if args.timeout and args.timeout > 0:
+            signal.alarm(args.timeout)
+            logging.info(f"Overriding default alarm: setting timeout to {args.timeout} seconds.")
+        
+        # If requested, limit the model cascade to only paid OpenRouter models (validated at startup)
+        if args.only_paid:
+            if not PAID_OPENROUTER_MODELS:
+                logging.error("Requested paid-only run but no paid OpenRouter models are configured/validated. Aborting.")
+                return
+            logging.info(f"Only-paid mode requested. Using {len(PAID_OPENROUTER_MODELS)} paid OpenRouter models for generation.")
+            # Replace the dynamic model cascade for this run with the paid models
+            global MODEL_CASCADE, model_cycler
+            MODEL_CASCADE = list(PAID_OPENROUTER_MODELS)
+            model_cycler = cycle(MODEL_CASCADE)
 
         logging.info("--- Starting Imaginator Data Generation (Free Tier) ---")
         

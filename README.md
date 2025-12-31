@@ -170,4 +170,5 @@ This script supports chunked uploads for large datasets and verifies the Hugging
 
 ## Progress
 
+2025-12-30T21:32:00Z | SambaNova Qwen3-235B integrated into model cascade, HF free models added, successful 3-minute test with 4 records generated, data uploaded to jeff-calderon/Tech_Resumes
 2025-12-28T22:23:56Z | upload_manifest created with 9 datasets, total_records=36344
