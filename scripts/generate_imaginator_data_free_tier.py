@@ -28,7 +28,12 @@ from huggingface_hub import HfApi, login, InferenceClient
 from collections import defaultdict
 import queue
 import subprocess
-from openai import OpenAI # For SambaNova/Groq integration
+# Optional OpenAI library for SambaNova/Groq integration; make import non-fatal for dev environments
+try:
+    from openai import OpenAI  # type: ignore
+except Exception:
+    OpenAI = None
+    logging.warning("Optional 'openai' library not available; SambaNova/Groq calls will be disabled or use fallbacks.")
 
 # --- Logging Setup ---
 logging.basicConfig(level=logging.INFO,
@@ -750,29 +755,95 @@ def make_sambanova_api_call(prompt_messages, model):
                 pass
 
 def parse_json_from_response(response_text: str):
-    """Extracts a JSON object from a model's text response, cleaning markdown code fences."""
-    
-    # Clean markdown fences
-    if response_text.strip().startswith("```json"):
-        response_text = response_text.strip()[7:]
-    if response_text.strip().startswith("```"):
-        response_text = response_text.strip()[3:]
-    if response_text.strip().endswith("```"):
-        response_text = response_text.strip()[:-3]
+    """Robustly extract a JSON object from model responses.
 
-    # Find the start and end of the JSON object
-    start_brace = response_text.find('{')
-    end_brace = response_text.rfind('}')
-    
-    if start_brace == -1 or end_brace == -1:
-        return None, "No JSON object found in the response."
+    Strategies (in order):
+    1. Try json.loads on the whole response (handles pure JSON or JSON arrays).
+    2. If it's a list, scan entries for a dict with expected keys or 'parameters' containing a nested JSON string.
+    3. Strip markdown fences and attempt to find the first balanced JSON object by scanning for matching braces.
+    4. Search for nested JSON strings inside keys like "json" and attempt to unescape and parse.
 
-    json_str = response_text[start_brace:end_brace+1]
+    Returns (obj, None) on success or (None, error_message) on failure.
+    """
+    text = response_text or ""
+
+    # 1) Try direct parse
     try:
-        return json.loads(json_str), None
-    except json.JSONDecodeError as e:
-        error_msg = f"Failed to parse extracted JSON. Error: {e}. Substring: '{json_str[:200]}...'"
-        return None, error_msg
+        parsed = json.loads(text)
+        # If parsed is list, try to find useful dict inside
+        if isinstance(parsed, dict):
+            return parsed, None
+        if isinstance(parsed, list) and parsed:
+            # Try common patterns: list of dicts where dict contains our keys
+            for entry in parsed:
+                if isinstance(entry, dict):
+                    # If entry itself looks like the scenario, return it
+                    if any(k in entry for k in ("job_ad_text", "extracted_skills_json", "domain_insights_json")):
+                        return entry, None
+                    # Handle function-call wrapper: {'type':..., 'parameters': {'json': '...'}}
+                    params = entry.get('parameters') if isinstance(entry.get('parameters'), dict) else None
+                    if params and 'json' in params:
+                        try:
+                            inner = json.loads(params['json'])
+                            if isinstance(inner, dict):
+                                return inner, None
+                        except Exception:
+                            pass
+            # Fall through to other strategies if nothing suitable
+    except Exception:
+        pass
+
+    # 2) Clean common markdown fences and code blocks
+    stripped = text.strip()
+    if stripped.startswith("```json"):
+        stripped = stripped[len("```json"):].lstrip()
+    if stripped.startswith("```"):
+        stripped = stripped[3:].lstrip()
+    if stripped.endswith("```"):
+        stripped = stripped[:-3].rstrip()
+
+    # 3) Attempt to find the first balanced JSON object by scanning for braces
+    def find_balanced_json(s: str):
+        for i, ch in enumerate(s):
+            if ch != '{':
+                continue
+            depth = 0
+            for j in range(i, len(s)):
+                if s[j] == '{':
+                    depth += 1
+                elif s[j] == '}':
+                    depth -= 1
+                    if depth == 0:
+                        candidate = s[i:j+1]
+                        try:
+                            return json.loads(candidate)
+                        except Exception:
+                            break
+        return None
+
+    result = find_balanced_json(stripped)
+    if result is not None:
+        return result, None
+
+    # 4) Search for nested JSON string like "json": "{...}"
+    try:
+        import re
+        m = re.search(r'"json"\s*:\s*"(\{.*?\})"', text, flags=re.S)
+        if m:
+            inner_escaped = m.group(1)
+            # Unescape common escaped quotes
+            inner_unescaped = inner_escaped.encode('utf-8').decode('unicode_escape')
+            try:
+                inner = json.loads(inner_unescaped)
+                return inner, None
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    # Give a helpful error message quoting a snippet for debugging
+    snippet = (text[:400] + '...') if len(text) > 400 else text
+    return None, f"No JSON object found in the response. Snippet: {snippet!r}"
 
 def generate_scenario_and_solution(resume_text):
     """
