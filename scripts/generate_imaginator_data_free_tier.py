@@ -36,8 +36,13 @@ except Exception:
     logging.warning("Optional 'openai' library not available; SambaNova/Groq calls will be disabled or use fallbacks.")
 
 # --- Logging Setup ---
+log_filename = f"logs/imaginator_generation_{int(time.time())}.log"
 logging.basicConfig(level=logging.INFO,
-                    format='%(asctime)s - %(threadName)s - %(levelname)s - %(message)s')
+                    format='%(asctime)s - %(threadName)s - %(levelname)s - %(message)s',
+                    handlers=[
+                        logging.FileHandler(log_filename),
+                        logging.StreamHandler()
+                    ])
 
 load_dotenv()
 
@@ -126,7 +131,7 @@ api_call_semaphore = threading.Semaphore(OPENROUTER_CONCURRENCY) # Allows concur
 # - OPENROUTER_PAID_SPACING: seconds to sleep *before* each paid call (default 0.5)
 # - OPENROUTER_AFTER_SUCCESS_WAIT: seconds to sleep *after* a successful scenario generation (default 1.1)
 OPENROUTER_PAID_SPACING = float(os.getenv("OPENROUTER_PAID_SPACING", "0.5"))
-OPENROUTER_AFTER_SUCCESS_WAIT = float(os.getenv("OPENROUTER_AFTER_SUCCESS_WAIT", "1.1"))
+OPENROUTER_AFTER_SUCCESS_WAIT = float(os.getenv("OPENROUTER_AFTER_SUCCESS_WAIT", "2"))
 # Limit concurrent SambaNova requests to 3
 samba_semaphore = threading.Semaphore(3)
 # Limit concurrent paid OpenRouter requests to 3
@@ -866,15 +871,21 @@ def generate_scenario_and_solution(resume_text):
     
     # --- Retry logic for robust scenario generation ---
     max_retries = len(MODEL_CASCADE)
+    retries_per_model = 3
     scenario_succeeded = False
-    for i in range(max_retries):
-        scenario_response_str, error = make_api_call(prompt_step1, current_model)
-        if not error:
-            scenario_succeeded = True
-            # Wait a configurable amount after a successful call to tune throughput and avoid transient rate limitations
-            time.sleep(OPENROUTER_AFTER_SUCCESS_WAIT) # Wait after a successful call
+    for i in range(max_retries // retries_per_model + 1):
+        for retry in range(retries_per_model):
+            scenario_response_str, error = make_api_call(prompt_step1, current_model)
+            if not error:
+                scenario_succeeded = True
+                # Wait a configurable amount after a successful call to tune throughput and avoid transient rate limitations
+                time.sleep(OPENROUTER_AFTER_SUCCESS_WAIT) # Wait after a successful call
+                break
+            # Wait even on failure to space out calls
+            time.sleep(OPENROUTER_AFTER_SUCCESS_WAIT)
+        if scenario_succeeded:
             break
-        logging.warning(f"  Worker failed with {current_model}. Retrying with next model...")
+        logging.warning(f"  Worker failed with {current_model} after {retries_per_model} retries. Switching to next model...")
         current_model = get_next_model()
     
     if not scenario_succeeded:
@@ -947,14 +958,19 @@ Task: Rewrite the Experience section to target this new role, using the inferred
     ]
 
     solution_succeeded = False
-    for i in range(max_retries):
-        solution_text, error = make_api_call(prompt_step2, current_model)
-        if not error:
-            solution_succeeded = True
-            # Wait a configurable amount after a successful call to tune throughput and avoid transient rate limitations
-            time.sleep(OPENROUTER_AFTER_SUCCESS_WAIT) # Wait after a successful call
+    for i in range(max_retries // retries_per_model + 1):
+        for retry in range(retries_per_model):
+            solution_text, error = make_api_call(prompt_step2, current_model)
+            if not error:
+                solution_succeeded = True
+                # Wait a configurable amount after a successful call to tune throughput and avoid transient rate limitations
+                time.sleep(OPENROUTER_AFTER_SUCCESS_WAIT) # Wait after a successful call
+                break
+            # Wait even on failure to space out calls
+            time.sleep(OPENROUTER_AFTER_SUCCESS_WAIT)
+        if solution_succeeded:
             break
-        logging.warning(f"  Worker failed (solution) with {current_model}. Retrying with next model...")
+        logging.warning(f"  Worker failed (solution) with {current_model} after {retries_per_model} retries. Switching to next model...")
         current_model = get_next_model()
 
     if not solution_succeeded:
@@ -1080,7 +1096,7 @@ def main():
         parser.add_argument("--output_file", type=str, default="imaginator_complex_free_TEST_50.jsonl", help="Output JSONL file name.")
         parser.add_argument("--seed_source", type=str, choices=['github','local'], default='local', help="Seed source: 'github' to fetch profiles from GitHub, 'local' to use pre-fetched local file.")
         parser.add_argument("--seed_local_file", type=str, default='training-data/formatted/github_profiles_prepared.jsonl', help="Local seed file path used when seed_source=local")
-        parser.add_argument("--workers", type=int, default=1, help="Number of concurrent workers.")
+        parser.add_argument("--workers", type=int, default=5, help="Number of concurrent workers.")
         parser.add_argument("--append", action="store_true", help="Append to the output file if it exists.")
         # New flags to support paid-only runs and custom timeout
         parser.add_argument("--only_paid", action="store_true", help="Use only the configured paid OpenRouter models for generation (paid models must be validated).")
