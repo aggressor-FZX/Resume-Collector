@@ -1081,6 +1081,7 @@ def main():
         parser.add_argument("--seed_source", type=str, choices=['github','local'], default='local', help="Seed source: 'github' to fetch profiles from GitHub, 'local' to use pre-fetched local file.")
         parser.add_argument("--seed_local_file", type=str, default='training-data/formatted/github_profiles_prepared.jsonl', help="Local seed file path used when seed_source=local")
         parser.add_argument("--workers", type=int, default=1, help="Number of concurrent workers.")
+        parser.add_argument("--append", action="store_true", help="Append to the output file if it exists.")
         # New flags to support paid-only runs and custom timeout
         parser.add_argument("--only_paid", action="store_true", help="Use only the configured paid OpenRouter models for generation (paid models must be validated).")
         parser.add_argument("--timeout", type=int, default=None, help="Maximum runtime in seconds (overrides default alarm).")
@@ -1143,9 +1144,12 @@ def main():
         
         num_initial_records = 0
         output_path = OUTPUT_DIR / args.output_file
-        if output_path.exists():
+        if args.append and output_path.exists():
             with output_path.open('r', encoding='utf-8') as f:
                 num_initial_records = sum(1 for _ in f)
+            logging.info(f"Append mode active: {num_initial_records} existing records in {output_path}.")
+        elif output_path.exists() and not args.append:
+            logging.info(f"Output file {output_path} exists and will be overwritten unless --append is used.")
 
         generated_records = []
         model_success_counts = defaultdict(int)
