@@ -171,6 +171,7 @@ This script supports chunked uploads for large datasets and verifies the Hugging
 ## Progress
 
 2025-12-31T02:54:57Z | imaginator_generation | completed | Generated 180 imaginator records in 300Run_imaginator_fuel.jsonl, uploaded to HF repo jeff-calderon/imaginator-dataset. Model contributions: nex-agi/deepseek-v3.1-nex-n1:free 22.22% (40), meta-llama/llama-3.3-70b-instruct 8.89% (16), deepseek/deepseek-v3.2-speciale 8.33% (15), qwen/qwen-2.5-72b-instruct 8.33% (15), nousresearch/hermes-4-70b 9.44% (17), deepseek/deepseek-v3.2 7.78% (14), thedrummer/rocinante-12b 7.78% (14), deepseek/deepseek-r1-distill-qwen-32b 6.11% (11), thedrummer/skyfall-36b-v2 6.67% (12), DeepSeek-V3.1 3.89% (7), Meta-Llama-3.3-70B-Instruct 4.44% (8), DeepSeek-R1-0528 3.33% (6), gpt-oss-120b 2.78% (5)
+2025-12-31T03:00:00Z | data_cleaning | completed | Cleaned all imaginator JSONL files: stripped conversational chatter, added placeholder disclaimers, fixed basic typos
 2025-12-30T21:32:00Z | SambaNova Qwen3-235B integrated into model cascade, HF free models added, successful 3-minute test with 4 records generated, data uploaded to jeff-calderon/Tech_Resumes
 2025-12-28T22:23:56Z | upload_manifest created with 9 datasets, total_records=36344
 
